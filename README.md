@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/manooch-logo.png" alt="Manooch" width="180">
+</p>
+
 # Manooch
 
 A crypto market-data price service. It connects to exchanges over public
