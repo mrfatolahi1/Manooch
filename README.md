@@ -1,4 +1,4 @@
-<p align="center">
+<p align="left">
   <img src="docs/assets/manooch-logo.png" alt="Manooch" width="180">
 </p>
 
