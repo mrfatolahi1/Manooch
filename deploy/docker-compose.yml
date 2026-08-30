@@ -1,9 +1,5 @@
-# `docker compose up` from the repository root brings up everything:
-#
-#   docker compose -f deploy/docker-compose.yml up
-#
-# Adding a venue is one service block here, one file in config/venues/, and one
-# adapter package. Nothing else.
+# Adding a venue is one service block here, one file in config/venues/ and one
+# adapter package.
 
 services:
   redis:
@@ -12,8 +8,7 @@ services:
     volumes:
       - ./redis.conf:/usr/local/etc/redis/redis.conf:ro
     ports:
-      # Loopback only: exposed so manooch-tap and manooch-status can be run
-      # from the host, not so anything else can reach it.
+      # Loopback only: for manooch-tap and manooch-status on the host.
       - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -26,8 +21,7 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
-    # --synthetic until the first adapter lands in M1. Without it the process
-    # starts, proves it can reach Redis, and idles.
+    # --synthetic until the first adapter lands; without it the feed idles.
     command: ["--exchange=BINANCE", "--config=/etc/manooch", "--synthetic"]
     volumes:
       - ../config:/etc/manooch:ro

@@ -1,9 +1,8 @@
-// Command manooch-status reads Manooch's Redis keys and prints one row per
-// stream.
+// Command manooch-status reads the Redis keys and prints one row per stream.
 //
 // It reads; it never subscribes. The last-value cache is the state of the
-// world, so a single pass over the keys is the whole picture — and a stream
-// whose key has expired simply is not there, which is the point.
+// world, so one pass over the keys is the whole picture, and a stream whose key
+// has expired simply is not there.
 package main
 
 import (
@@ -77,8 +76,8 @@ func run() error {
 	return nil
 }
 
-// scanKeys uses SCAN, never KEYS. KEYS walks the whole keyspace in one blocking
-// call, which on a busy instance stalls every publisher behind it.
+// scanKeys uses SCAN, never KEYS: KEYS walks the whole keyspace in one blocking
+// call and stalls every publisher behind it.
 func scanKeys(ctx context.Context, rdb *redis.Client, pattern string) ([]string, error) {
 	var (
 		keys   []string
@@ -159,8 +158,7 @@ func readRows(ctx context.Context, rdb *redis.Client, keys []string) ([]row, err
 			r.channel = core.ChannelName(parts.Channel)
 		}
 
-		// PTTL: -1 is a key with no expiry, -2 is a key that vanished between
-		// the SCAN and now — which is itself the answer.
+		// -1 is a key with no expiry; -2 is one that vanished since the SCAN.
 		switch d, err := ttls[i].Result(); {
 		case err != nil:
 			r.ttlText = "?"
@@ -236,8 +234,8 @@ func print(rows []row, colour bool) {
 	fmt.Println("\n" + summary)
 }
 
-// marker prefixes anything that is not healthy, so the row still stands out
-// through a pipe, a log file or a terminal with no colour.
+// marker prefixes anything not healthy, so the row stands out through a pipe or
+// a terminal with no colour.
 func marker(s pb.Status) string {
 	switch s {
 	case pb.Status_STATUS_DEGRADED:

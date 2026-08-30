@@ -15,14 +15,9 @@ import (
 //	Manooch:{VENUE}:{MARKET_TYPE}:{SYMBOL}:{channel}
 //	Manooch:{VENUE}:venue:{subject}
 //
-// with "Manooch" in title case, venue, market type and symbol upper case, and
-// the channel in lower snake case.
-//
-// Build every key through Key or VenueKey. Concatenating one at a call site is
-// forbidden, and not as a matter of taste: a key with a typo in it is written
-// successfully, published successfully, and read by nobody. There is no error
-// anywhere in that sequence — the stream simply appears dead to its consumer
-// while every metric on this side says healthy.
+// Build every key through Key or VenueKey, never by concatenation: a key with a
+// typo is written and published successfully and read by nobody, so the stream
+// looks dead to its consumer while every metric here says healthy.
 const (
 	// Prefix is the first component of every key Manooch writes.
 	Prefix = "Manooch"
@@ -44,9 +39,8 @@ var (
 	subjectRe = regexp.MustCompile(`^[a-z0-9_]+$`)
 )
 
-// Key builds the key for one stream. It is also the Pub/Sub channel name:
-// Redis keeps keys and channels in separate namespaces, so one string can
-// safely be both, and a consumer that has a key has the channel for free.
+// Key builds the key for one stream, which is also its Pub/Sub channel name:
+// Redis keeps the two in separate namespaces, so one string is safely both.
 func Key(venue string, mt pb.MarketType, symbol string, ch pb.Channel) string {
 	var b strings.Builder
 	b.Grow(len(Prefix) + len(venue) + len(symbol) + 32)
@@ -62,14 +56,13 @@ func Key(venue string, mt pb.MarketType, symbol string, ch pb.Channel) string {
 	return b.String()
 }
 
-// VenueKey builds a venue-wide key, one that is about the connection to the
-// venue rather than about any single instrument.
+// VenueKey builds a key about the venue connection rather than an instrument.
 func VenueKey(venue, subject string) string {
 	return Prefix + sep + strings.ToUpper(venue) + sep + VenueScope + sep + strings.ToLower(subject)
 }
 
-// MatchPattern is the SCAN/PSUBSCRIBE glob for one venue, or for every venue
-// when venue is empty.
+// MatchPattern is the SCAN/PSUBSCRIBE glob for one venue, or every venue when
+// venue is empty.
 func MatchPattern(venue string) string {
 	if venue == "" {
 		return Prefix + sep + "*"
@@ -77,12 +70,9 @@ func MatchPattern(venue string) string {
 	return Prefix + sep + strings.ToUpper(venue) + sep + "*"
 }
 
-// KeyParts is a parsed key.
-//
-// Consumers of market data never call ParseKey: the instrument identity they
-// need is inside the message, in a structured form that cannot be ambiguous.
-// This exists for manooch-status and manooch-tap, which are handed keys by
-// Redis and have nothing else to go on.
+// KeyParts is a parsed key. Data consumers never call ParseKey — the instrument
+// identity they need is structured inside the message — but manooch-tap and
+// manooch-status are handed keys by Redis and have nothing else to go on.
 type KeyParts struct {
 	Venue      string
 	MarketType pb.MarketType
@@ -103,10 +93,9 @@ func (p KeyParts) String() string {
 	return Key(p.Venue, p.MarketType, p.Symbol, p.Channel)
 }
 
-// ParseKey splits a key and validates every component. Anything it does not
-// recognise is an error rather than a best guess: a key that does not parse is
-// a key something else wrote, or one we wrote wrongly, and both are worth
-// hearing about.
+// ParseKey splits a key and validates every component. An unrecognised key was
+// either written by something else or written by us wrongly; both are worth an
+// error rather than a best guess.
 func ParseKey(s string) (KeyParts, error) {
 	parts := strings.Split(s, sep)
 	if len(parts) < 4 || len(parts) > 5 {

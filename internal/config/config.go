@@ -1,11 +1,9 @@
-// Package config loads and validates Manooch's configuration.
+// Package config loads and validates the service configuration.
 //
-// Two properties are deliberate. Unknown keys are a startup error rather than
-// a warning, because a typo'd key that is silently ignored means the service
-// runs with a default nobody chose. And there is no reload: no watcher, no
-// SIGHUP. A price feed whose behaviour changes underneath a running process is
-// a feed whose behaviour at any past moment cannot be reconstructed. To change
-// config, restart.
+// Unknown keys are a startup error, not a warning: a typo'd key that is
+// silently ignored leaves the service on a default nobody chose. There is no
+// reload — no watcher, no SIGHUP — because behaviour that changes under a
+// running process cannot be reconstructed afterwards.
 package config
 
 import (
@@ -23,9 +21,10 @@ type Duration time.Duration
 // Std returns the standard library duration.
 func (d Duration) Std() time.Duration { return time.Duration(d) }
 
+// String renders the duration the way it is written in YAML.
 func (d Duration) String() string { return time.Duration(d).String() }
 
-// UnmarshalYAML parses a Go duration string.
+// UnmarshalYAML parses a Go duration string such as "500ms".
 func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
 	var s string
 	if err := n.Decode(&s); err != nil {
@@ -39,12 +38,11 @@ func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
 	return nil
 }
 
-// MarshalYAML keeps --validate output readable.
+// MarshalYAML writes the duration back as a string.
 func (d Duration) MarshalYAML() (any, error) { return time.Duration(d).String(), nil }
 
-// Config is the fully resolved configuration: defaults.yaml overlaid with one
-// venue file. The two files have disjoint sections in practice, but any key
-// the venue file sets wins.
+// Config is defaults.yaml overlaid with one venue file. Any key the venue file
+// sets wins.
 type Config struct {
 	// From defaults.yaml.
 	Service    ServiceConfig    `yaml:"service"`
@@ -67,18 +65,21 @@ type Config struct {
 	Instruments     []InstrumentConfig `yaml:"instruments" validate:"required,min=1,dive"`
 }
 
+// ServiceConfig is the service section.
 type ServiceConfig struct {
 	LogLevel string     `yaml:"log_level" validate:"required,oneof=debug info warn error"`
 	HTTP     HTTPConfig `yaml:"http"`
 }
 
+// HTTPConfig is the service.http section: the admin surface.
 type HTTPConfig struct {
 	Enabled bool `yaml:"enabled"`
-	// Listen must be a loopback address. /metrics and /debug/pprof are not
-	// endpoints to put on an interface anyone else can reach.
+	// Listen must be a loopback address: /debug/pprof will hand a heap dump to
+	// anyone who can reach it.
 	Listen string `yaml:"listen" validate:"required,hostname_port"`
 }
 
+// RedisConfig is the redis section.
 type RedisConfig struct {
 	Addr        string   `yaml:"addr"         validate:"required,hostname_port"`
 	DB          int      `yaml:"db"           validate:"gte=0"`
@@ -87,30 +88,31 @@ type RedisConfig struct {
 	PoolSize    int      `yaml:"pool_size"    validate:"required,gte=1"`
 }
 
-// ScalesConfig restates the fixed-point scales. They are checked against the
-// constants compiled into pkg/price: config and code disagreeing about where
-// the decimal point sits is a silent factor-of-1000 error in every price.
+// ScalesConfig restates the fixed-point scales. Load checks them against
+// pkg/price: a disagreement is a silent power-of-ten error in every number.
 type ScalesConfig struct {
 	PriceExp int `yaml:"price_exp"`
 	SizeExp  int `yaml:"size_exp"`
 	RateExp  int `yaml:"rate_exp"`
 }
 
+// PublishConfig is the publish section.
 type PublishConfig struct {
 	SchemaVersion uint32 `yaml:"schema_version" validate:"required,gte=1"`
 	Cadence       string `yaml:"cadence"        validate:"required,eq=every_update"`
 }
 
+// HealthConfig is the health section.
 type HealthConfig struct {
 	HeartbeatInterval Duration `yaml:"heartbeat_interval" validate:"required,gt=0"`
-	// TTLMultiplier scales a stream's cadence into its Redis key TTL. Below 2
-	// a single late message expires the key and a healthy stream reads as
-	// stale, so 2 is the floor.
+	// TTLMultiplier scales a stream's cadence into its key TTL. Below 2 a
+	// single late message expires the key and a healthy stream reads as stale.
 	TTLMultiplier       int   `yaml:"ttl_multiplier"         validate:"required,gte=2"`
 	ClockSkewDegradedMS int64 `yaml:"clock_skew_degraded_ms" validate:"required,gt=0"`
 	ClockSkewStaleMS    int64 `yaml:"clock_skew_stale_ms"    validate:"required,gt=0"`
 }
 
+// FallbackConfig is the fallback section. Parsed and validated; unread until M2.
 type FallbackConfig struct {
 	Enabled            bool     `yaml:"enabled"`
 	MaxConcurrentPolls int      `yaml:"max_concurrent_polls" validate:"required,gte=1"`
@@ -119,6 +121,7 @@ type FallbackConfig struct {
 	MaxDuration        Duration `yaml:"max_duration"         validate:"required,gt=0"`
 }
 
+// SupervisorConfig is the supervisor section. Parsed and validated; unread until M2.
 type SupervisorConfig struct {
 	StreamRestartBackoff   BackoffConfig        `yaml:"stream_restart_backoff"`
 	SocketReconnectBackoff BackoffConfig        `yaml:"socket_reconnect_backoff"`
@@ -126,6 +129,7 @@ type SupervisorConfig struct {
 	GoroutineLeakTimeout   Duration             `yaml:"goroutine_leak_timeout" validate:"required,gt=0"`
 }
 
+// BackoffConfig is one backoff block under supervisor.
 type BackoffConfig struct {
 	Initial    Duration `yaml:"initial"    validate:"required,gt=0"`
 	Max        Duration `yaml:"max"        validate:"required,gt=0"`
@@ -133,11 +137,13 @@ type BackoffConfig struct {
 	Jitter     string   `yaml:"jitter"     validate:"required,oneof=none full equal"`
 }
 
+// CircuitBreakerConfig is the supervisor.circuit_breaker section.
 type CircuitBreakerConfig struct {
 	ConsecutiveFailures int      `yaml:"consecutive_failures" validate:"required,gte=1"`
 	OpenDuration        Duration `yaml:"open_duration"        validate:"required,gt=0"`
 }
 
+// MetadataConfig is the metadata section. Parsed and validated; unread until M3.
 type MetadataConfig struct {
 	RefreshInterval Duration `yaml:"refresh_interval" validate:"required,gt=0"`
 	StartupRequired bool     `yaml:"startup_required"`
@@ -150,16 +156,18 @@ type EndpointsConfig struct {
 	REST map[string]string `yaml:"rest" validate:"required,min=1"`
 }
 
+// RateLimitConfig is the rate_limit section. Parsed and validated; unread until M1.
 type RateLimitConfig struct {
 	RESTWeightPerMinute int `yaml:"rest_weight_per_minute" validate:"required,gt=0"`
-	// MaxWeightFraction is the share of the venue's published budget we allow
-	// ourselves. Never 100%: the venue counts differently than we do.
+	// MaxWeightFraction is the share of the venue's published budget to use.
+	// Never 1: the venue counts weight differently than we do.
 	MaxWeightFraction          float64 `yaml:"max_weight_fraction"          validate:"required,gt=0,lte=1"`
 	WSConnectPer5Min           int     `yaml:"ws_connect_per_5min"          validate:"required,gt=0"`
 	WSConnectFraction          float64 `yaml:"ws_connect_fraction"          validate:"required,gt=0,lte=1"`
 	SubscriptionsPerConnection int     `yaml:"subscriptions_per_connection" validate:"required,gt=0"`
 }
 
+// ConnectionConfig is the connection section. Parsed and validated; unread until M1.
 type ConnectionConfig struct {
 	MaxStreamsPerSocket int      `yaml:"max_streams_per_socket" validate:"required,gt=0"`
 	PingInterval        Duration `yaml:"ping_interval"          validate:"required,gt=0"`
@@ -167,6 +175,7 @@ type ConnectionConfig struct {
 	ReadTimeout         Duration `yaml:"read_timeout"           validate:"required,gt=0"`
 }
 
+// QuirksConfig is the quirks section: per-venue behaviour the adapter must honour.
 type QuirksConfig struct {
 	TimestampUnit       string   `yaml:"timestamp_unit"        validate:"required,oneof=ms us ns s"`
 	BookDepthsSupported []uint32 `yaml:"book_depths_supported" validate:"required,min=1,dive,gt=0"`
@@ -185,8 +194,8 @@ type InstrumentConfig struct {
 	Chans []pb.Channel  `yaml:"-"`
 }
 
-// VenueSymbol maps a canonical symbol to what this venue calls it, falling
-// back to the concatenation most venues use.
+// VenueSymbol maps a canonical symbol to what this venue calls it, falling back
+// to the concatenation most venues use.
 func (c *Config) VenueSymbol(canonical string) string {
 	if s, ok := c.SymbolOverrides[canonical]; ok {
 		return s
@@ -199,9 +208,8 @@ func (c *Config) BookCadence() time.Duration {
 	return time.Duration(c.Quirks.BookCadenceMS) * time.Millisecond
 }
 
-// TTL turns a stream cadence into the Redis key TTL for that stream. Key
-// present means fresh, key absent means stale — there is no third state and no
-// separate timestamp to fall out of sync.
+// TTL turns a stream cadence into that stream's Redis key TTL. Key present
+// means fresh, key absent means stale; there is no third state.
 func (c *Config) TTL(cadence time.Duration) time.Duration {
 	return cadence * time.Duration(c.Health.TTLMultiplier)
 }
@@ -215,9 +223,8 @@ type Stream struct {
 	BookDepth   uint32
 }
 
-// Streams expands the instrument blocks into the individual streams this venue
-// is configured to publish. Both --validate and the synthetic generator walk
-// it, so the expansion is written once.
+// Streams expands the instrument blocks into individual streams. Both
+// --validate and the synthetic generator walk it.
 func (c *Config) Streams() []Stream {
 	var out []Stream
 	for _, in := range c.Instruments {

@@ -1,12 +1,9 @@
-// Package synth generates plausible market data.
+// Package synth generates market data so the publisher, manooch-tap and
+// manooch-status can be exercised before any exchange adapter exists. When the
+// first adapter lands, a bug can then be attributed to the adapter rather than
+// to the plumbing underneath it.
 //
-// It exists so that the publisher, manooch-tap and manooch-status can be
-// exercised end to end before any exchange adapter exists — and so that when
-// the first adapter lands in M1, a bug can be attributed to the adapter rather
-// than to the plumbing underneath it.
-//
-// The numbers are invented. The envelopes are not: real timestamps, real
-// sequence numbers, real fixed-point values at the global scales.
+// The numbers are invented; the envelopes are not.
 //
 // Dev only. Remove at M4.
 package synth
@@ -27,8 +24,8 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// Cadences for the channels a venue does not publish on the book's schedule.
-// These are invented for the generator and say nothing about any real venue.
+// Cadences for channels not on the book's schedule. Invented for the generator;
+// they say nothing about any real venue.
 const (
 	tradesCadence     = 250 * time.Millisecond
 	markPriceCadence  = time.Second
@@ -53,8 +50,7 @@ func New(cfg *config.Config, pub publish.Publisher, log *slog.Logger) *Generator
 	return &Generator{cfg: cfg, pub: pub, log: log, markets: map[string]*market{}}
 }
 
-// Run publishes until ctx is cancelled, then returns once every stream has
-// stopped.
+// Run publishes until ctx is cancelled, returning once every stream has stopped.
 func (g *Generator) Run(ctx context.Context) {
 	streams := g.cfg.Streams()
 	g.log.Info("synthetic generator starting", "streams", len(streams))
@@ -77,7 +73,7 @@ func (g *Generator) runStream(ctx context.Context, s config.Stream) {
 
 	ref, err := core.ParseCanonical(s.Symbol, s.MarketType)
 	if err != nil {
-		// Load() already rejected anything that could land here.
+		// config.Load already rejected anything that could land here.
 		g.log.Error("synthetic stream skipped", "key", key, "error", err.Error())
 		return
 	}
@@ -98,18 +94,15 @@ func (g *Generator) runStream(ctx context.Context, s config.Stream) {
 			if msg == nil {
 				return // channel the generator does not produce
 			}
-			// A failed write is already counted and rate-limit logged by the
-			// publisher. Nothing useful to add per message.
+			// Already counted and rate-limit logged by the publisher.
 			_ = g.pub.Publish(ctx, key, msg, ttl)
 		}
 	}
 }
 
-// schedule returns how often a channel ticks and how long its key should live.
-//
-// Trades get no TTL. They are event driven, so an empty minute is normal and
-// an expiring key would report a healthy stream as stale. Their liveness comes
-// from the socket instead.
+// schedule returns how often a channel ticks and how long its key lives. Trades
+// get no TTL: they are event driven, so an empty minute is normal and an
+// expiring key would report a working stream as dead.
 func (g *Generator) schedule(ch pb.Channel) (cadence, ttl time.Duration) {
 	switch ch {
 	case pb.Channel_CHANNEL_ORDERBOOK:
@@ -148,11 +141,11 @@ func (g *Generator) build(s config.Stream, instrument *pb.Instrument, mkt *marke
 	}
 }
 
-// envelope fills the fields an adapter owns. The publisher fills the rest.
+// envelope fills the fields an adapter owns; the publisher fills the rest.
 func (g *Generator) envelope(instrument *pb.Instrument, ch pb.Channel, venueSeq uint64) *pb.Envelope {
 	now := time.Now()
-	// A plausible venue-to-us delay, so latency histograms have something with
-	// shape in them rather than a spike at zero.
+	// A plausible venue-to-us delay, so the latency histograms have a
+	// distribution rather than a spike at zero.
 	exchangeTime := now.Add(-time.Duration(5+rand.IntN(20)) * time.Millisecond)
 	recvTime := now.Add(-time.Duration(rand.IntN(500)) * time.Microsecond)
 
@@ -179,7 +172,7 @@ func buildBook(env *pb.Envelope, mid price.Price, tick price.Price, mkt *market,
 		Asks:  make([]*pb.PriceLevel, 0, depth),
 		Depth: depth,
 	}
-	// Half a tick of spread either side of the mid, then one tick per level.
+	// One tick per level, either side of the mid.
 	for i := range int64(depth) {
 		bid := int64(mid) - int64(tick)*(i+1)
 		ask := int64(mid) + int64(tick)*(i+1)
@@ -213,7 +206,7 @@ func buildTrades(env *pb.Envelope, mid price.Price, tick price.Price, mkt *marke
 }
 
 func buildFunding(env *pb.Envelope, mkt *market) *pb.Funding {
-	// A rate in the ballpark of +/- 1bp, at the 1e-12 rate scale.
+	// Roughly +/- 1bp at the 1e-12 rate scale.
 	rate := int64(rand.IntN(2*int(price.RateScale/10_000)+1)) - int64(price.RateScale/10_000)
 	next := time.Now().Truncate(fundingIntervalSeconds * time.Second).Add(fundingIntervalSeconds * time.Second)
 	return &pb.Funding{
@@ -224,10 +217,8 @@ func buildFunding(env *pb.Envelope, mkt *market) *pb.Funding {
 	}
 }
 
-// ---------- per-instrument state ----------
-
-// market is the shared price for one instrument, so that the book, the trades
-// and the mark price of the same symbol tell the same story.
+// market is the shared price for one instrument, so the book, trades and mark
+// price of a symbol tell the same story.
 type market struct {
 	mu   sync.Mutex
 	mid  price.Price
@@ -247,7 +238,7 @@ func (g *Generator) market(mt pb.MarketType, symbol, base string) *market {
 	return m
 }
 
-// seeds are plausible mid prices, tick sizes and trade sizes by base asset.
+// seeds are mid price, tick size and trade size by base asset.
 var seeds = map[string]struct {
 	mid  string
 	tick string
@@ -269,7 +260,7 @@ func newMarket(base string) *market {
 	return &market{mid: mid, tick: tick, unit: unit}
 }
 
-// step advances the random walk one increment and returns the new mid.
+// step advances the random walk one increment and returns the new mid and tick.
 func (m *market) step() (price.Price, price.Price) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -280,8 +271,7 @@ func (m *market) step() (price.Price, price.Price) {
 	return m.mid, m.tick
 }
 
-// jitter is a few ticks either way, for prices that should sit near the mid
-// without sitting exactly on it.
+// jitter is a few ticks either way, for prices near the mid but not on it.
 func (m *market) jitter(tick price.Price) int64 {
 	return int64(tick) * int64(rand.IntN(5)-2)
 }

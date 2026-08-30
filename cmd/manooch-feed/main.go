@@ -1,9 +1,8 @@
 // Command manooch-feed is the venue daemon: it connects to one exchange,
 // normalizes what it sees, and publishes to Redis.
 //
-// In M0 there are no adapters. Without --synthetic the process starts, proves
-// it can reach Redis, serves /healthz and idles. That is the expected M0
-// behaviour, and it says so on startup.
+// There are no adapters yet. Without --synthetic the process starts, proves it
+// can reach Redis, serves /healthz and idles, and says so on startup.
 package main
 
 import (
@@ -29,8 +28,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// shutdownDeadline bounds graceful shutdown. Past it we say what is still
-// running rather than hanging a container restart forever.
+// shutdownDeadline bounds graceful shutdown; past it we report what is still
+// running rather than hanging a container restart.
 const shutdownDeadline = 10 * time.Second
 
 func main() {
@@ -61,8 +60,8 @@ func run() error {
 		return err
 	}
 
-	// --validate opens nothing: no Redis connection, no listener, no socket.
-	// It is meant to be safe to run against production config from anywhere.
+	// Opens nothing — no Redis connection, no listener — so it is safe to run
+	// against production config from anywhere.
 	if *validate {
 		return printResolved(os.Stdout, cfg, *configDir)
 	}
@@ -73,9 +72,8 @@ func run() error {
 	}
 	metrics := obs.NewMetrics()
 
-	// instance_id is generated once per process. publish_seq restarts at zero
-	// on every start, so without this a consumer cannot tell "the feed
-	// restarted" from "messages were dropped on the bus".
+	// Once per process. publish_seq restarts at zero on every start, so without
+	// this a consumer cannot tell a restart from messages dropped on the bus.
 	instanceID := uuid.NewString()
 	started := time.Now()
 
@@ -111,8 +109,8 @@ func run() error {
 
 	var srv *http.Server
 	if cfg.Service.HTTP.Enabled {
-		// Bind synchronously so that a port clash is a startup failure rather
-		// than a line in the log of a process that keeps running blind.
+		// Bind synchronously: otherwise a port clash is a log line in a process
+		// that keeps running with no metrics and no /healthz.
 		ln, err := net.Listen("tcp", cfg.Service.HTTP.Listen)
 		if err != nil {
 			return fmt.Errorf("http listen: %w", err)
@@ -159,8 +157,8 @@ func run() error {
 	select {
 	case <-done:
 	case <-shutdownCtx.Done():
-		// Say so rather than exiting quietly: a goroutine that outlived the
-		// deadline is holding something, and the next start will contend with it.
+		// A goroutine past the deadline is holding something the next start
+		// will contend with.
 		logger.Error("shutdown deadline exceeded, goroutines still running")
 		metrics.LeakedGoroutines.WithLabelValues(cfg.Venue).Set(1)
 	}
@@ -173,8 +171,8 @@ func run() error {
 }
 
 // printResolved writes the merged config and the exact set of Redis keys it
-// implies. The key list is the useful half: it is where a wrong symbol or a
-// channel on the wrong market type becomes obvious before anything runs.
+// implies. The key list is where a wrong symbol or a channel on the wrong
+// market type becomes obvious before anything runs.
 func printResolved(w *os.File, cfg *config.Config, dir string) error {
 	out, err := yaml.Marshal(cfg)
 	if err != nil {

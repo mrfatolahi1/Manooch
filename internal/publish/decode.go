@@ -9,11 +9,10 @@ import (
 
 // NewMessage returns an empty message of the type a channel carries.
 //
-// The mapping lives here, next to the key scheme, because the channel
-// component of a key is the only thing that says what the bytes are. Consumers
-// of market data subscribe to channels they chose and know the type already;
-// manooch-tap and manooch-status are handed arbitrary keys by Redis and have
-// nothing else to go on.
+// The mapping lives beside the key scheme because a key's channel component is
+// the only thing that says what the bytes are. It exists for manooch-tap and
+// manooch-status, which are handed arbitrary keys by Redis; a data consumer
+// subscribes to channels it chose and knows the type already.
 func NewMessage(ch pb.Channel) (proto.Message, error) {
 	switch ch {
 	case pb.Channel_CHANNEL_ORDERBOOK:

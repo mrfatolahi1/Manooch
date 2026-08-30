@@ -1,4 +1,4 @@
-// Package obs holds Manooch's logging and metrics wiring.
+// Package obs holds the logging and metrics wiring.
 package obs
 
 import (
@@ -11,11 +11,9 @@ import (
 // NewLogger builds the process logger: JSON, at the configured level, tagged
 // with the venue this process serves.
 //
-// Nothing in Manooch logs per message, at any level, ever. A book stream at
-// 10 updates a second across 200 instruments is 2,000 lines a second, which is
-// not a log — it is a denial of service against the disk, and against anyone
-// trying to find the one line that mattered. Lifecycle events and status
-// transitions are logged. Data is not.
+// Nothing logs per message, at any level. A book stream at 10 updates a second
+// across 200 instruments is 2,000 lines a second, which buries the one line
+// that mattered. Log lifecycle events and status transitions, not data.
 func NewLogger(w io.Writer, level, venue string) (*slog.Logger, error) {
 	lvl, err := ParseLevel(level)
 	if err != nil {

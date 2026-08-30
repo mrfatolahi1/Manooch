@@ -40,9 +40,9 @@ lint:
 validate:
 	$(GO) run ./cmd/manooch-feed --exchange=$(EXCHANGE) --config=$(CONFIG) --validate
 
-## run: run the feed against a Redis on localhost, publishing synthetic data.
-## The committed config points at the compose service name, so this makes a
-## local copy that points at 127.0.0.1 instead.
+## run: feed against a Redis on localhost, publishing synthetic data. The
+## committed config points at the compose service name, so this copies it and
+## rewrites the address.
 run: $(LOCALCONF)
 	$(GO) run ./cmd/manooch-feed --exchange=$(EXCHANGE) --config=$(LOCALCONF) --synthetic
 

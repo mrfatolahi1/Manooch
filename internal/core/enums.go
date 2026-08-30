@@ -7,9 +7,8 @@ import (
 	pb "github.com/you/manooch/gen/manoochv1"
 )
 
-// The names here are derived from the protobuf enum names rather than kept in
-// a parallel table, so they cannot drift away from schema/manooch.proto.
-
+// Names are derived from the protobuf enum names rather than kept in a
+// parallel table, so they cannot drift from schema/manooch.proto.
 const (
 	marketTypePrefix = "MARKET_TYPE_"
 	channelPrefix    = "CHANNEL_"
@@ -28,7 +27,7 @@ func MarketTypeName(mt pb.MarketType) string {
 }
 
 // ParseMarketType is the inverse of MarketTypeName. The unspecified value is
-// rejected: a market type we could not identify must never reach a key.
+// rejected: an unidentified market type must never reach a key.
 func ParseMarketType(s string) (pb.MarketType, error) {
 	v, ok := pb.MarketType_value[marketTypePrefix+strings.ToUpper(s)]
 	if !ok || v == int32(pb.MarketType_MARKET_TYPE_UNSPECIFIED) {
@@ -47,8 +46,7 @@ func ChannelName(ch pb.Channel) string {
 	return strings.ToLower(strings.TrimPrefix(name, channelPrefix))
 }
 
-// ParseChannel is the inverse of ChannelName. The unspecified value is
-// rejected.
+// ParseChannel is the inverse of ChannelName. The unspecified value is rejected.
 func ParseChannel(s string) (pb.Channel, error) {
 	v, ok := pb.Channel_value[channelPrefix+strings.ToUpper(s)]
 	if !ok || v == int32(pb.Channel_CHANNEL_UNSPECIFIED) {
@@ -75,8 +73,8 @@ func SourceName(src pb.Source) string {
 	return strings.TrimPrefix(name, sourcePrefix)
 }
 
-// IsDerivative reports whether the market type is a perpetual or a dated
-// future. Only derivatives have a mark price, an index price or funding.
+// IsDerivative reports whether the market type is a perpetual or dated future.
+// Only derivatives have a mark price, an index price or funding.
 func IsDerivative(mt pb.MarketType) bool {
 	switch mt {
 	case pb.MarketType_MARKET_TYPE_PERP_LINEAR,
@@ -88,10 +86,9 @@ func IsDerivative(mt pb.MarketType) bool {
 	return false
 }
 
-// IsInverse reports whether the market type is inverse-settled. This is
-// load-bearing: on an inverse instrument a size is a number of contracts, not
-// a quantity of base asset, and collapsing the two produces position sizes
-// that are wrong by the price.
+// IsInverse reports whether the market type is inverse-settled. On an inverse
+// instrument a size is a count of contracts, not an amount of base asset;
+// collapsing the two makes every position wrong by roughly the price.
 func IsInverse(mt pb.MarketType) bool {
 	switch mt {
 	case pb.MarketType_MARKET_TYPE_PERP_INVERSE,
@@ -101,9 +98,8 @@ func IsInverse(mt pb.MarketType) bool {
 	return false
 }
 
-// ChannelValidFor reports whether a channel can exist on a market type.
-// Subscribing to funding on a spot market is a config mistake, and one that
-// would otherwise show up as a stream that is silently never populated.
+// ChannelValidFor reports whether a channel can exist on a market type. Funding
+// on a spot market would otherwise become a stream that is never populated.
 func ChannelValidFor(ch pb.Channel, mt pb.MarketType) bool {
 	switch ch {
 	case pb.Channel_CHANNEL_ORDERBOOK, pb.Channel_CHANNEL_TRADES,

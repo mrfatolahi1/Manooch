@@ -2,10 +2,9 @@
 
 // Integration tests for the publisher, against a real Redis in a container.
 //
-// Not miniredis. Manooch leans on TTL expiry timing, keyspace notifications
-// and Pub/Sub buffer behaviour — which is to say, on precisely the parts of
-// Redis a reimplementation approximates rather than reproduces. A fake that
-// agrees with us about all of them proves nothing.
+// Not miniredis: these exercise TTL expiry timing, keyspace notifications and
+// Pub/Sub buffer behaviour, which are the parts of Redis a reimplementation
+// approximates rather than reproduces.
 //
 //	go test -tags=integration ./...
 package publish_test
@@ -49,8 +48,7 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
-	// The same settings deploy/redis.conf uses, since they are what the tests
-	// are here to exercise.
+	// The settings from deploy/redis.conf, which are what these tests exercise.
 	res, err := pool.RunWithOptions(&dockertest.RunOptions{
 		Repository: "redis",
 		Tag:        "8-alpine",
@@ -158,8 +156,8 @@ func book(t *testing.T, symbol string) *pb.OrderBook {
 
 // ---------- tests ----------
 
-// TestPublishWritesKeyAndChannel is the core claim of §7.2: one round trip
-// leaves both a readable last value and a delivered notification.
+// TestPublishWritesKeyAndChannel: one round trip leaves both a readable last
+// value and a delivered notification.
 func TestPublishWritesKeyAndChannel(t *testing.T) {
 	ctx := context.Background()
 	pub := newPublisher(t)
@@ -220,8 +218,8 @@ func TestPublishWritesKeyAndChannel(t *testing.T) {
 	}
 }
 
-// TestKeyExpiresAndNotifies proves the mechanism M2's REST fallback is built
-// on: the key going away is itself the event.
+// TestKeyExpiresAndNotifies: the key going away is itself the event, which is
+// what M2's REST fallback will be triggered by.
 func TestKeyExpiresAndNotifies(t *testing.T) {
 	ctx := context.Background()
 	pub := newPublisher(t)
@@ -261,7 +259,7 @@ func TestKeyExpiresAndNotifies(t *testing.T) {
 }
 
 // TestZeroTTLPersists covers trades: event driven, so an empty stretch is
-// normal and an expiring key would call a healthy stream dead.
+// normal and an expiring key would call a working stream dead.
 func TestZeroTTLPersists(t *testing.T) {
 	ctx := context.Background()
 	pub := newPublisher(t)
@@ -277,15 +275,15 @@ func TestZeroTTLPersists(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PTTL: %v", err)
 	}
-	// -1 is go-redis for "the key exists and has no expiry".
+	// -1 is go-redis for "exists, no expiry".
 	if pttl != -1 {
 		t.Errorf("PTTL = %v, want -1 (no expiry)", pttl)
 	}
 }
 
-// TestPublishSeqIsGapFree is the property a consumer relies on to detect
-// bus-side drops. Redis Pub/Sub is fire and forget: without this, a slow
-// subscriber's missing messages are indistinguishable from a quiet market.
+// TestPublishSeqIsGapFree covers what a consumer relies on to detect bus-side
+// drops: without it, a slow subscriber's missing messages are indistinguishable
+// from a quiet market.
 func TestPublishSeqIsGapFree(t *testing.T) {
 	ctx := context.Background()
 	pub := newPublisher(t)
@@ -331,8 +329,8 @@ func TestPublishSeqIsGapFree(t *testing.T) {
 }
 
 // TestInstanceIDDistinguishesRestartFromDrop: publish_seq restarts at zero on
-// every process start, so instance_id is the only thing that tells a consumer
-// "the feed restarted" apart from "you missed 10,000 messages".
+// every process start, so instance_id is the only thing separating a restart
+// from ten thousand missed messages.
 func TestInstanceIDDistinguishesRestartFromDrop(t *testing.T) {
 	ctx := context.Background()
 	key := testKey(t, pb.Channel_CHANNEL_ORDERBOOK)
@@ -362,10 +360,9 @@ func TestInstanceIDDistinguishesRestartFromDrop(t *testing.T) {
 	}
 }
 
-// TestNoEvictionSurfacesWriteErrors is the reason deploy/redis.conf sets
-// maxmemory-policy to noeviction. Under any eviction policy a full instance
-// would quietly drop last-value keys and healthy streams would read as stale.
-// Under noeviction the write fails, loudly, and we can say so.
+// TestNoEvictionSurfacesWriteErrors is why deploy/redis.conf sets
+// maxmemory-policy to noeviction: under any eviction policy a full instance
+// drops last-value keys and working streams read as stale.
 func TestNoEvictionSurfacesWriteErrors(t *testing.T) {
 	ctx := context.Background()
 	pub := newPublisher(t)
@@ -378,8 +375,7 @@ func TestNoEvictionSurfacesWriteErrors(t *testing.T) {
 		rdb.Del(bg, "filler")
 	})
 
-	// Fill enough that the instance is comfortably over the cap we are about
-	// to impose.
+	// Fill past the cap we are about to impose.
 	filler := strings.Repeat("x", 64*1024)
 	for i := range 100 {
 		if err := rdb.Set(ctx, fmt.Sprintf("filler:%d", i), filler, time.Minute).Err(); err != nil {

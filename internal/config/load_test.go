@@ -13,9 +13,8 @@ import (
 
 var update = flag.Bool("update", false, "rewrite the error.golden files")
 
-// assemble builds a config directory from testdata/valid, overlaying the files
-// of one invalid case on top. Each case therefore only has to carry the file
-// it breaks, and every case is otherwise a config that would load.
+// assemble builds a config directory from testdata/valid, overlaying one
+// invalid case. Each case carries only the file it breaks.
 func assemble(t *testing.T, invalidCase string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -74,8 +73,7 @@ func TestLoadValid(t *testing.T) {
 		t.Errorf("TTL(book cadence) = %v, want 300ms", got)
 	}
 
-	// The venue file's symbol_overrides win; everything else falls back to
-	// stripping the separator.
+	// symbol_overrides wins; everything else strips the separator.
 	if got := cfg.VenueSymbol("BTC_USDT"); got != "BTCUSDT" {
 		t.Errorf("VenueSymbol(BTC_USDT) = %q", got)
 	}
@@ -108,10 +106,9 @@ func TestLoadValid(t *testing.T) {
 	}
 }
 
-// TestLoadInvalid walks testdata/invalid. Each subdirectory is one broken
-// config, and error.golden is the exact message an operator would see. The
-// messages are checked into the repo because they are the interface between a
-// bad config and the person who has to fix it at three in the morning.
+// TestLoadInvalid walks testdata/invalid; each subdirectory is one broken
+// config and error.golden is the exact message an operator sees. Those messages
+// are checked in because they are the interface to whoever fixes the config.
 func TestLoadInvalid(t *testing.T) {
 	entries, err := os.ReadDir(filepath.Join("testdata", "invalid"))
 	if err != nil {
@@ -149,8 +146,7 @@ func TestLoadInvalid(t *testing.T) {
 				t.Errorf("error mismatch\n got: %s\nwant: %s", got, want)
 			}
 
-			// Whatever the rule, the operator must be told which file and
-			// which key. Every line names a config file.
+			// Whatever the rule, every line must name a config file.
 			for _, line := range strings.Split(got, "\n") {
 				if strings.HasPrefix(line, "  ") { // continuation of a yaml error
 					continue

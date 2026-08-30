@@ -11,10 +11,9 @@ import (
 
 // newMux builds the admin surface.
 //
-// There is no market-data endpoint here, and there will not be one. Consumers
-// read Redis. An HTTP path to the same data would be a second contract with
-// its own serialization, its own staleness rules and its own bugs, and the two
-// would disagree the first time either changed.
+// There is no market-data endpoint and will not be one: consumers read Redis,
+// and a second path to the same data would be a second contract that disagrees
+// with the first the moment either changes.
 func newMux(m *obs.Metrics, venue, instanceID string, started time.Time) *http.ServeMux {
 	mux := http.NewServeMux()
 

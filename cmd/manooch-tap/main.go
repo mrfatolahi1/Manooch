@@ -1,9 +1,5 @@
-// Command manooch-tap subscribes to Manooch's Pub/Sub channels and prints what
-// goes past.
-//
-// It exists because the wire format is protobuf, which means `redis-cli
-// psubscribe` shows an operator a screen of binary and nothing else. This is
-// the tool you reach for when a consumer says it is not receiving something.
+// Command manooch-tap subscribes to the Pub/Sub channels and prints what goes
+// past. The wire format is protobuf, so redis-cli psubscribe shows only binary.
 package main
 
 import (
@@ -81,8 +77,7 @@ func run() error {
 	}
 }
 
-// seen is the last thing we saw on a topic, so gaps can be spotted as they go
-// past rather than reconstructed afterwards.
+// seen is the last message on a topic, so gaps are spotted as they go past.
 type seen struct {
 	publishSeq uint64
 	instanceID string
@@ -119,10 +114,10 @@ func (t *tap) handle(key string, payload []byte, asJSON, raw bool) {
 		t.writeRaw(key, env.PublishSeq, payload)
 	}
 
-	// Redis Pub/Sub is fire and forget. A subscriber that fell behind, or one
-	// Redis disconnected for overrunning its output buffer, misses messages
-	// with no error anywhere. A jump in publish_seq is the only evidence, and
-	// a change of instance_id is how a restart is told apart from a drop.
+	// Pub/Sub is fire and forget: a subscriber that fell behind, or one Redis
+	// dropped for overrunning its output buffer, misses messages with no error
+	// anywhere. A publish_seq jump is the only evidence; instance_id separates
+	// a drop from a restart.
 	if prev, ok := t.seen[key]; ok {
 		switch {
 		case prev.instanceID != env.InstanceId:
@@ -159,7 +154,7 @@ func (t *tap) writeRaw(key string, seq uint64, payload []byte) {
 	t.n++
 }
 
-// summarize is one line per message: the few numbers worth reading at speed.
+// summarize is the few numbers per message worth reading at speed.
 func summarize(msg any) string {
 	switch m := msg.(type) {
 	case *pb.OrderBook:

@@ -38,7 +38,7 @@ func TestParsePrice(t *testing.T) {
 		{"sci at the bottom", "1e-11", 1, nil},
 		{"sci zero mantissa huge exponent", "0e999999999999", 0, nil},
 
-		// Range boundary. MaxInt64 at 1e-11 is 92233720.36854775807.
+		// MaxInt64 at 1e-11 is 92233720.36854775807.
 		{"max exact", "92233720.36854775807", math.MaxInt64, nil},
 		{"max integer", "92233720", 9_223_372_000_000_000_000, nil},
 		{"one past max", "92233720.36854775808", 0, ErrOutOfRange},
@@ -47,7 +47,7 @@ func TestParsePrice(t *testing.T) {
 		{"overflow huge exponent", "1e999999999999", 0, ErrOutOfRange},
 		{"overflow long digits", "123456789012345678901234", 0, ErrOutOfRange},
 
-		// Below the scale. Truncating would silently change the number.
+		// Below the scale: truncating would silently change the number.
 		{"precision loss one place", "0.000000000001", 0, ErrPrecisionLoss},
 		{"precision loss deep", "1e-12", 0, ErrPrecisionLoss},
 		{"precision loss tiny exponent", "1e-999999999999", 0, ErrPrecisionLoss},
@@ -134,8 +134,7 @@ func TestParseRate(t *testing.T) {
 	}
 }
 
-// TestRoundTripCanonical is the property that matters most: a canonical
-// decimal string survives parse -> String unchanged.
+// TestRoundTripCanonical: a canonical decimal survives parse -> String intact.
 func TestRoundTripCanonical(t *testing.T) {
 	prices := []string{
 		"0", "1", "68432.15", "0.0000082", "0.00000000012",
@@ -174,8 +173,8 @@ func TestRoundTripCanonical(t *testing.T) {
 	}
 }
 
-// TestRoundTripNonCanonical checks that inputs which are the same number
-// written differently all land on the same canonical output.
+// TestRoundTripNonCanonical: the same number written differently lands on one
+// canonical output.
 func TestRoundTripNonCanonical(t *testing.T) {
 	for _, in := range []string{"68432.150", "+68432.15", "0068432.15", "6.843215e4", "684321500e-4"} {
 		p, err := ParsePrice(in)
@@ -232,10 +231,9 @@ func TestFloatIsApproximate(t *testing.T) {
 	}
 }
 
-// FuzzParsePrice asserts the two things that must hold for arbitrary venue
-// input: the parser never panics, and it never returns a value that wrapped.
-// A wrapped int64 is the failure this package exists to prevent, and it is
-// invisible — no panic, no error, just a negative price.
+// FuzzParsePrice asserts the two properties that must hold for arbitrary venue
+// input: the parser never panics, and never returns a wrapped value. A wrapped
+// int64 is invisible — no panic, no error, just a negative price.
 func FuzzParsePrice(f *testing.F) {
 	seeds := []string{
 		"", "0", "1", "-1", "68432.15", "0.0000082", "0.00000000012",
@@ -258,7 +256,7 @@ func FuzzParsePrice(f *testing.F) {
 		if p < 0 {
 			t.Fatalf("ParsePrice(%q) = %d: negative result means the value wrapped", s, p)
 		}
-		// The canonical form of a successful parse must parse back identically.
+		// A successful parse must round-trip through its canonical form.
 		again, err := ParsePrice(p.String())
 		if err != nil {
 			t.Fatalf("ParsePrice(%q) = %d, but re-parsing %q failed: %v", s, p, p.String(), err)
@@ -267,7 +265,7 @@ func FuzzParsePrice(f *testing.F) {
 			t.Fatalf("ParsePrice(%q) = %d, re-parse of %q = %d", s, p, p.String(), again)
 		}
 
-		// Sizes and rates share the parser; neither may panic either.
+		// Sizes and rates share the parser.
 		if sz, err := ParseSize(s); err == nil && sz < 0 {
 			t.Fatalf("ParseSize(%q) = %d: negative result means the value wrapped", s, sz)
 		}

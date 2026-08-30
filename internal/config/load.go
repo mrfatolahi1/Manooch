@@ -29,11 +29,9 @@ const (
 
 var symbolRe = regexp.MustCompile(core.CanonicalPattern)
 
-// Load reads dir/defaults.yaml, overlays dir/venues/<venue>.yaml, and returns
-// the merged configuration only if every validation rule passes.
-//
-// Merging is per key: the venue file overrides the individual keys it sets and
-// leaves the rest of defaults.yaml alone.
+// Load reads dir/defaults.yaml, overlays dir/venues/<venue>.yaml and returns the
+// result only if every validation rule passes. Merging is per key: the venue
+// file overrides the keys it sets and leaves the rest alone.
 func Load(dir string, venue string) (*Config, error) {
 	defaultsPath := filepath.Join(dir, DefaultsFile)
 	venuePath := filepath.Join(dir, VenuesDir, strings.ToLower(venue)+".yaml")
@@ -60,9 +58,7 @@ func Load(dir string, venue string) (*Config, error) {
 	return cfg, nil
 }
 
-// decodeStrict decodes one YAML file onto out. Unknown keys are an error: a
-// misspelled key that is quietly dropped leaves the service running on a
-// default the operator did not choose and cannot see.
+// decodeStrict decodes one YAML file onto out, rejecting unknown keys.
 func decodeStrict(path string, out any) error {
 	f, err := os.Open(path)
 	if err != nil {
@@ -83,8 +79,8 @@ func decodeStrict(path string, out any) error {
 
 // ---------- provenance ----------
 
-// provenance remembers which file set which key, so that a validation failure
-// can tell the operator where to go and fix it.
+// provenance remembers which file set which key, so a validation failure can
+// name the file to go and fix.
 type provenance struct {
 	files        map[string]string // dotted key path -> file that set it
 	defaultsPath string
@@ -128,7 +124,7 @@ func flatten(prefix string, v any, file string, out map[string]string) {
 }
 
 // file returns the file responsible for a key path, walking up to the nearest
-// ancestor that was actually set when the key itself is absent.
+// ancestor that was set when the key itself is absent.
 func (p *provenance) file(path string) string {
 	for cur := path; cur != ""; {
 		if f, ok := p.files[cur]; ok {
@@ -143,7 +139,7 @@ func (p *provenance) file(path string) string {
 	return p.defaultsPath
 }
 
-// errf builds an error that names both the offending key and its file.
+// errf builds an error naming both the offending key and its file.
 func (p *provenance) errf(path, format string, args ...any) error {
 	return fmt.Errorf("%s: %s: %s", p.file(path), path, fmt.Sprintf(format, args...))
 }
@@ -176,9 +172,8 @@ func (c *Config) validate(p *provenance) error {
 	return errors.Join(errs...)
 }
 
-// validateScales rejects a config whose scales disagree with pkg/price. The
-// wire format has no room for a per-message scale beyond the envelope's
-// override, so a mismatch here is every number off by a power of ten.
+// validateScales rejects scales that disagree with pkg/price; a mismatch puts
+// every number off by a power of ten.
 func (c *Config) validateScales(p *provenance) []error {
 	var errs []error
 	for _, s := range []struct {
@@ -197,9 +192,8 @@ func (c *Config) validateScales(p *provenance) []error {
 	return errs
 }
 
-// validateHTTP enforces that the admin surface stays on loopback. /metrics
-// leaks the shape of the book we are watching and /debug/pprof will hand out a
-// heap dump to anyone who asks.
+// validateHTTP keeps the admin surface on loopback: /metrics leaks which books
+// we watch and /debug/pprof hands out a heap dump to anyone who asks.
 func (c *Config) validateHTTP(p *provenance) []error {
 	const key = "service.http.listen"
 	if !c.Service.HTTP.Enabled {
@@ -230,8 +224,7 @@ func (c *Config) validateHealth(p *provenance) []error {
 func (c *Config) validateEndpoints(p *provenance) []error {
 	var errs []error
 	check := func(kind string, m map[string]string, schemes ...string) {
-		// Sorted so that a config with several broken endpoints reports them
-		// in the same order every run.
+		// Sorted so several broken endpoints report in a stable order.
 		for _, name := range slices.Sorted(maps.Keys(m)) {
 			raw := m[name]
 			key := "endpoints." + kind + "." + name
@@ -269,8 +262,8 @@ func (c *Config) validateSymbolOverrides(p *provenance) []error {
 }
 
 // resolveInstruments checks every instrument block and fills in the parsed
-// enums. It is the last step, so the resolved fields are only ever populated
-// on a config that passed.
+// enums. It runs last, so those fields are only populated on a config that
+// passed.
 func (c *Config) resolveInstruments(p *provenance) []error {
 	var errs []error
 	seenMarket := map[string]int{}
@@ -334,8 +327,8 @@ func (c *Config) resolveInstruments(p *provenance) []error {
 	return errs
 }
 
-// yamlTagName makes validator report the YAML key an operator wrote rather
-// than the Go field name they have never seen.
+// yamlTagName makes validator report the YAML key an operator wrote rather than
+// the Go field name they have never seen.
 func yamlTagName(f reflect.StructField) string {
 	name, _, _ := strings.Cut(f.Tag.Get("yaml"), ",")
 	if name == "" || name == "-" {

@@ -7,16 +7,12 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// Metrics is the complete set of collectors Manooch exports.
+// Metrics is the complete set of collectors exported by the service, including
+// the ones that stay at zero until a later phase populates them.
 //
-// All of them are declared here in M0, including the ones that stay at zero
-// until the phase that populates them. Naming a metric is a decision about
-// what an operator will look at during an incident, and it is better made once
-// than reinvented in five packages under time pressure.
-//
-// They live on a private registry rather than the default one. Nothing is
+// They live on a private registry rather than the default one, so nothing is
 // registered that was not asked for: no Go runtime collector, no process
-// collector, no metric that arrives because a dependency imported a package.
+// collector, no metric arriving because a dependency imported a package.
 type Metrics struct {
 	reg *prometheus.Registry
 
@@ -48,7 +44,7 @@ type Metrics struct {
 	FallbackPolls  *prometheus.CounterVec // venue, channel, result
 }
 
-// Stream status gauge values. Numeric so that alerting can threshold on them.
+// Values for the StreamStatus gauge, numeric so alerting can threshold on them.
 const (
 	StreamStatusHealthy  = 1
 	StreamStatusDegraded = 2
@@ -76,10 +72,9 @@ func NewMetrics() *Metrics {
 		return h
 	}
 
-	// End-to-end latency spans venue network time, so it needs a wide range.
-	// Internal latency is our own overhead and should be microseconds; giving
-	// it its own buckets is what makes "the venue is slow" distinguishable
-	// from "we are slow".
+	// Separate ranges: publish latency spans venue network time, internal
+	// latency is our own overhead. Sharing buckets would make "the venue is
+	// slow" indistinguishable from "we are slow".
 	publishBuckets := prometheus.ExponentialBuckets(0.0005, 2, 14) // 0.5ms .. ~4s
 	internalBuckets := prometheus.ExponentialBuckets(0.00005, 2, 15)
 
@@ -126,7 +121,7 @@ func NewMetrics() *Metrics {
 	return m
 }
 
-// Registry exposes the underlying registry, for tests and for the HTTP handler.
+// Registry exposes the underlying registry.
 func (m *Metrics) Registry() *prometheus.Registry { return m.reg }
 
 // Handler serves the Prometheus exposition format for this registry only.
