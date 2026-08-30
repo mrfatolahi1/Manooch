@@ -34,6 +34,8 @@ graph TD
   cli --> core[internal/core]
   synth --> config
   synth --> publish
+  synth --> core
+  synth --> price
   config --> core
   config --> price[pkg/price]
   publish --> core
@@ -41,7 +43,7 @@ graph TD
   core --> gen[gen/manoochv1]
 ```
 
-`pkg/price` and `gen/manoochv1` import nothing from this repo. `pkg/price` is under `pkg/` because consumers import it to decode published values.
+`gen/manoochv1` is imported by most packages here; only `internal/core`'s edge is drawn, to keep the graph readable. `pkg/price` and `gen/manoochv1` import nothing from this repository. `pkg/price` sits under `pkg/` because consumers import it to decode published values.
 
 ## Dataflow for one message
 

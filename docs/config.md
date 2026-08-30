@@ -42,6 +42,8 @@ Both files decode onto the *same* `Config` value. `yaml.v3` only writes keys pre
 
 `validate` runs `go-playground/validator` over the struct tags first — with `RegisterTagNameFunc` set to `yamlTagName` so messages name the YAML key, not the Go field — then the semantic rules: `validateScales`, `validateHTTP`, `validateHealth`, `validateEndpoints`, `validateSymbolOverrides`, `resolveInstruments`. Every error goes through `provenance.errf`, producing `<file>: <key path>: <message>`. All errors are collected with `errors.Join`, so one run reports every problem.
 
+`validateHTTP` returns early when `service.http.enabled` is false, so a non-loopback `listen` is only rejected when a server would actually be started. The `hostname_port` struct tag on `Listen` applies either way.
+
 `resolveInstruments` is last and is what fills `InstrumentConfig.MT` and `.Chans`, so those fields are only populated on a config that passed.
 
 ## How it is used

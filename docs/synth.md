@@ -39,7 +39,7 @@ The cadences other than the book's are invented for this generator and say nothi
 
 ### Envelope
 
-`envelope` sets `Venue`, `Instrument`, `Channel`, `VenueSeq` (a per-stream counter), `VenueSeqPresent: true`, `Source: SOURCE_WEBSOCKET` and `Status: STATUS_HEALTHY`. `ExchangeTimeNs` is backdated 5–25ms and `RecvTimeNs` 0–500µs, so the latency histograms in `internal/obs` have a distribution rather than a spike at zero. `publish.RedisPublisher.Publish` fills the rest.
+`envelope` sets `Venue`, `Instrument`, `Channel`, `VenueSeq` (a per-stream counter), `VenueSeqPresent: true`, `Source: SOURCE_WEBSOCKET` and `Status: STATUS_HEALTHY`. `ExchangeTimeNs` is backdated 5–24ms and `RecvTimeNs` by under 500µs, so the latency histograms in `internal/obs` have a distribution rather than a spike at zero. `publish.RedisPublisher.Publish` fills the rest.
 
 ## How it is used
 

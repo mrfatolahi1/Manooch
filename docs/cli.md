@@ -38,7 +38,7 @@ No test files.
 | `--validate` | `false` | Load, print, exit 0 |
 | `--synthetic` | `false` | Run `internal/synth` instead of connecting to a venue |
 
-Startup order in `run`: parse flags → `config.Load` → if `--validate`, print and return → `obs.NewLogger` and `obs.NewMetrics` → `uuid.NewString()` for `instance_id` → `publish.NewRedis` (bounded by `redis.dial_timeout`) → `net.Listen` then `srv.Serve` in a goroutine → optionally start `synth` → block on `signal.NotifyContext` for `SIGINT`/`SIGTERM` → `srv.Shutdown`, wait for the generator, `pub.Close`.
+Startup order in `run`: parse flags → `config.Load` → if `--validate`, print and return → `obs.NewLogger` and `obs.NewMetrics` → `uuid.NewString()` for `instance_id` → `publish.NewRedis` (bounded by `redis.dial_timeout`) → `net.Listen` then `srv.Serve` in a goroutine → optionally start `synth` → block on `signal.NotifyContext` for `os.Interrupt` and `syscall.SIGTERM` → `srv.Shutdown`, wait for the generator, `pub.Close`.
 
 Routes on `newMux`: `GET /healthz` (JSON: `status`, `venue`, `instance_id`, `uptime_seconds`, `uptime`), `GET /metrics`, and `/debug/pprof/` plus `cmdline`, `profile`, `symbol`, `trace`. There is no market-data route: consumers read Redis, and a second data path would be a second contract to keep in sync.
 
@@ -62,7 +62,7 @@ Default output is one line per message: publish timestamp, key, `publish_seq`, s
 - **`--validate` must open nothing.** It returns before `publish.NewRedis` and before `net.Listen`, so it is safe to run against production config from anywhere. Any new work added to `run` goes after that return.
 - **Use `SCAN`, not `KEYS`.** `KEYS` walks the whole keyspace in one blocking call and stalls every publisher behind it.
 - **Close Redis after waiting for the generator, not before.** `pub.Close` runs after the `WaitGroup` drains; closing the pool first would make every in-flight `Publish` fail and log.
-- **Keep the admin surface on loopback.** `internal/config.validateHTTP` rejects a non-loopback `service.http.listen`, so `/metrics` and `/debug/pprof` — which will hand out a heap dump to anyone who asks — cannot be reached off-host.
+- **Keep the admin surface on loopback.** `internal/config.validateHTTP` rejects a non-loopback `service.http.listen` whenever `service.http.enabled` is true, so `/metrics` and `/debug/pprof` — which will hand out a heap dump to anyone who asks — cannot be reached off-host.
 
 ## Not here
 
