@@ -1,0 +1,1 @@
+<config>/defaults.yaml: health.clock_skew_stale_ms: is 500 but must be greater than health.clock_skew_degraded_ms (2000)

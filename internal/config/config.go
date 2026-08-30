@@ -29,11 +29,11 @@ func (d Duration) String() string { return time.Duration(d).String() }
 func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
 	var s string
 	if err := n.Decode(&s); err != nil {
-		return fmt.Errorf("duration must be a string like \"500ms\" or \"1h\": %w", err)
+		return fmt.Errorf("line %d: duration must be a string like \"500ms\" or \"1h\"", n.Line)
 	}
 	v, err := time.ParseDuration(s)
 	if err != nil {
-		return fmt.Errorf("invalid duration %q", s)
+		return fmt.Errorf("line %d: invalid duration %q", n.Line, s)
 	}
 	*d = Duration(v)
 	return nil

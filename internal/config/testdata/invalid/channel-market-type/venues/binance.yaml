@@ -1,0 +1,42 @@
+venue: BINANCE
+enabled: true
+
+endpoints:
+  ws:
+    SPOT:        "wss://stream.binance.com:9443/stream"    # TODO(M1): verify
+    PERP_LINEAR: "wss://fstream.binance.com/stream"        # TODO(M1): verify
+  rest:
+    SPOT:        "https://api.binance.com"                 # TODO(M1): verify
+    PERP_LINEAR: "https://fapi.binance.com"                # TODO(M1): verify
+
+rate_limit:
+  rest_weight_per_minute: 6000     # TODO(M1): verify
+  max_weight_fraction: 0.5
+  ws_connect_per_5min: 300         # TODO(M1): verify
+  ws_connect_fraction: 0.5
+  subscriptions_per_connection: 200
+
+connection:
+  max_streams_per_socket: 100
+  ping_interval: 20s
+  pong_timeout: 10s
+  read_timeout: 60s
+
+quirks:
+  timestamp_unit: ms               # ms|us|ns|s
+  book_depths_supported: [5, 10, 20]
+  book_cadence_ms: 100             # TODO(M1): verify
+
+symbol_overrides:
+  BTC_USDT: BTCUSDT
+
+instruments:
+  - market_type: SPOT
+    book_depth: 20
+    channels: [orderbook, trades, funding]
+    symbols: [BTC_USDT, ETH_USDT, SOL_USDT]
+
+  - market_type: PERP_LINEAR
+    book_depth: 20
+    channels: [orderbook, trades, mark_price, index_price, funding]
+    symbols: [BTC_USDT, ETH_USDT]

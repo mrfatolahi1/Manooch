@@ -1,0 +1,1 @@
+<config>/defaults.yaml: publish.cadence: must be "every_update", got on_change

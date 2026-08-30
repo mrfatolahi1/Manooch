@@ -1,0 +1,1 @@
+<config>/venues/binance.yaml: rate_limit.max_weight_fraction: must be at most 1, got 1.5

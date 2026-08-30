@@ -1,0 +1,1 @@
+<config>/defaults.yaml: scales.price_exp: is -8 but pkg/price is compiled for -11

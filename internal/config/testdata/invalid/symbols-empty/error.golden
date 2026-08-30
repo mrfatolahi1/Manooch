@@ -1,0 +1,1 @@
+<config>/venues/binance.yaml: instruments[0].symbols: must have at least 1 entries

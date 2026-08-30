@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/url"
 	"os"
@@ -229,7 +230,10 @@ func (c *Config) validateHealth(p *provenance) []error {
 func (c *Config) validateEndpoints(p *provenance) []error {
 	var errs []error
 	check := func(kind string, m map[string]string, schemes ...string) {
-		for name, raw := range m {
+		// Sorted so that a config with several broken endpoints reports them
+		// in the same order every run.
+		for _, name := range slices.Sorted(maps.Keys(m)) {
+			raw := m[name]
 			key := "endpoints." + kind + "." + name
 			if _, err := core.ParseMarketType(name); err != nil {
 				errs = append(errs, p.errf(key, "%v", err))
@@ -251,7 +255,8 @@ func (c *Config) validateEndpoints(p *provenance) []error {
 
 func (c *Config) validateSymbolOverrides(p *provenance) []error {
 	var errs []error
-	for canonical, venueSymbol := range c.SymbolOverrides {
+	for _, canonical := range slices.Sorted(maps.Keys(c.SymbolOverrides)) {
+		venueSymbol := c.SymbolOverrides[canonical]
 		key := "symbol_overrides." + canonical
 		if !symbolRe.MatchString(canonical) {
 			errs = append(errs, p.errf(key, "key must match %s", core.CanonicalPattern))

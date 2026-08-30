@@ -1,0 +1,2 @@
+<config>/defaults.yaml: yaml: unmarshal errors:
+  line 13: field poolsize not found in type config.RedisConfig

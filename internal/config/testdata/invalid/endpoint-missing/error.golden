@@ -1,0 +1,1 @@
+<config>/venues/binance.yaml: endpoints.ws: has no entry for market_type "PERP_LINEAR" used by instruments[1]
