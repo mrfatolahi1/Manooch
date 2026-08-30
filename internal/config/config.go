@@ -205,3 +205,33 @@ func (c *Config) BookCadence() time.Duration {
 func (c *Config) TTL(cadence time.Duration) time.Duration {
 	return cadence * time.Duration(c.Health.TTLMultiplier)
 }
+
+// A Stream is one instrument on one channel: exactly one Redis key.
+type Stream struct {
+	MarketType  pb.MarketType
+	Symbol      string // canonical, "BTC_USDT"
+	VenueSymbol string // what this venue calls it, "BTCUSDT"
+	Channel     pb.Channel
+	BookDepth   uint32
+}
+
+// Streams expands the instrument blocks into the individual streams this venue
+// is configured to publish. Both --validate and the synthetic generator walk
+// it, so the expansion is written once.
+func (c *Config) Streams() []Stream {
+	var out []Stream
+	for _, in := range c.Instruments {
+		for _, sym := range in.Symbols {
+			for _, ch := range in.Chans {
+				out = append(out, Stream{
+					MarketType:  in.MT,
+					Symbol:      sym,
+					VenueSymbol: c.VenueSymbol(sym),
+					Channel:     ch,
+					BookDepth:   in.BookDepth,
+				})
+			}
+		}
+	}
+	return out
+}
