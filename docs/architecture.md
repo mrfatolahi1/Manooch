@@ -26,21 +26,21 @@ Producers depend on `publish.Publisher`, not on Redis. `internal/synth` takes a 
 
 ```mermaid
 graph TD
-  feed[cmd/manooch-feed] --> config[internal/config]
-  feed --> synth[internal/synth]
-  feed --> publish[internal/publish]
-  feed --> obs[internal/obs]
-  cli[cmd/manooch-tap<br/>cmd/manooch-status] --> publish
-  cli --> core[internal/core]
+  feed["cmd/manooch-feed"] --> config["internal/config"]
+  cli["cmd/manooch-tap<br/>cmd/manooch-status"] --> publish["internal/publish"]
+  synth["internal/synth"] --> price["pkg/price"]
+  config --> core["internal/core"]
+  core --> gen["gen/manoochv1"]
+  feed --> synth
+  feed --> publish
+  feed --> obs["internal/obs"]
+  cli --> core
   synth --> config
   synth --> publish
   synth --> core
-  synth --> price
-  config --> core
-  config --> price[pkg/price]
+  config --> price
   publish --> core
   publish --> obs
-  core --> gen[gen/manoochv1]
 ```
 
 `gen/manoochv1` is imported by most packages here; only `internal/core`'s edge is drawn, to keep the graph readable. `pkg/price` and `gen/manoochv1` import nothing from this repository. `pkg/price` sits under `pkg/` because consumers import it to decode published values.
