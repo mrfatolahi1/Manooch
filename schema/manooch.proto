@@ -1,0 +1,152 @@
+syntax = "proto3";
+
+package manooch.v1;
+option go_package = "github.com/you/manooch/gen/manoochv1;manoochv1";
+
+// ---------- enums ----------
+
+enum MarketType {
+  MARKET_TYPE_UNSPECIFIED = 0;
+  MARKET_TYPE_SPOT           = 1;
+  MARKET_TYPE_MARGIN         = 2;
+  MARKET_TYPE_PERP_LINEAR    = 3;
+  MARKET_TYPE_PERP_INVERSE   = 4;
+  MARKET_TYPE_FUTURE_LINEAR  = 5;
+  MARKET_TYPE_FUTURE_INVERSE = 6;
+}
+
+enum Channel {
+  CHANNEL_UNSPECIFIED = 0;
+  CHANNEL_ORDERBOOK   = 1;
+  CHANNEL_TRADES      = 2;
+  CHANNEL_MARK_PRICE  = 3;
+  CHANNEL_INDEX_PRICE = 4;
+  CHANNEL_FUNDING     = 5;
+  CHANNEL_METADATA    = 6;
+  CHANNEL_HEALTH      = 7;
+}
+
+enum Source {
+  SOURCE_UNSPECIFIED = 0;
+  SOURCE_WEBSOCKET   = 1;
+  SOURCE_REST        = 2;
+}
+
+enum Status {
+  STATUS_UNSPECIFIED = 0;
+  STATUS_HEALTHY     = 1;
+  STATUS_DEGRADED    = 2;
+  STATUS_STALE       = 3;
+}
+
+enum Side {
+  SIDE_UNSPECIFIED = 0;
+  SIDE_BUY         = 1;
+  SIDE_SELL        = 2;
+}
+
+// ---------- identity ----------
+
+message Instrument {
+  string     base         = 1;   // "BTC"
+  string     quote        = 2;   // "USDT"
+  string     settle       = 3;   // "USDT" linear, "BTC" inverse, "" spot
+  MarketType market_type  = 4;
+  string     expiry       = 5;   // "20260626", empty for perp/spot
+  string     canonical    = 6;   // "BTC_USDT"
+  string     venue_symbol = 7;   // "BTCUSDT" — required, order service needs it
+}
+
+// ---------- envelope ----------
+
+message Envelope {
+  string     venue             = 1;   // "BINANCE"
+  Instrument instrument        = 2;
+  Channel    channel           = 3;
+
+  int64      exchange_time_ns  = 4;
+  int64      recv_time_ns      = 5;
+  int64      publish_time_ns   = 6;
+
+  uint64     venue_seq         = 7;
+  bool       venue_seq_present = 8;
+  uint64     publish_seq       = 9;
+  string     instance_id       = 10;  // UUID, regenerated each process start
+
+  Source     source            = 11;
+  Status     status            = 12;
+  string     status_reason     = 13;  // free text, empty when HEALTHY
+
+  uint32     schema_version    = 14;
+
+  int32      price_exp         = 15;  // 0 => global -11
+  int32      size_exp          = 16;  // 0 => global -8
+}
+
+// ---------- payloads ----------
+
+message PriceLevel {
+  int64 price = 1;
+  int64 size  = 2;
+}
+
+message OrderBook {
+  Envelope            env   = 1;
+  repeated PriceLevel bids  = 2;   // descending price
+  repeated PriceLevel asks  = 3;   // ascending price
+  uint32              depth = 4;   // actual N delivered
+}
+
+message Trade {
+  string trade_id         = 1;
+  int64  price            = 2;
+  int64  size             = 3;
+  Side   aggressor_side   = 4;
+  int64  exchange_time_ns = 5;
+}
+
+message Trades {
+  Envelope       env    = 1;
+  repeated Trade trades = 2;   // venues batch; preserve venue order
+}
+
+message MarkPrice {
+  Envelope env        = 1;
+  int64    mark_price = 2;
+}
+
+message IndexPrice {
+  Envelope env         = 1;
+  int64    index_price = 2;
+}
+
+message Funding {
+  Envelope env                   = 1;
+  int64    funding_rate          = 2;  // rate scale 1e-12
+  int64    next_funding_time_ns  = 3;
+  int64    interval_seconds      = 4;
+}
+
+message InstrumentMeta {
+  Envelope env                 = 1;
+  int64    tick_size           = 2;   // price scale
+  int64    lot_size            = 3;   // size scale
+  int64    min_size            = 4;   // size scale
+  int64    max_size            = 5;   // size scale
+  int64    min_notional        = 6;   // price scale
+  int64    contract_multiplier = 7;   // size scale
+  bool     active              = 8;
+  int64    last_refresh_ns     = 9;
+}
+
+message Health {
+  Envelope env                  = 1;
+  Status   status               = 2;
+  string   reason               = 3;
+  int64    last_message_age_ms  = 4;
+  uint32   reconnect_count      = 5;
+  uint32   stream_restart_count = 6;
+  bool     fallback_active      = 7;
+  int64    clock_skew_ms        = 8;
+  uint32   leaked_goroutines    = 9;
+}
