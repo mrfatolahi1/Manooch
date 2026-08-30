@@ -1,0 +1,55 @@
+service:
+  log_level: info                  # debug|info|warn|error
+  http:
+    enabled: true
+    listen: "127.0.0.1:9101"       # localhost only, never 0.0.0.0
+
+redis:
+  addr: "redis:6379"
+  db: 0
+  dial_timeout: 2s
+  read_timeout: 1s
+  pool_size: 8
+
+scales:
+  price_exp: -11
+  size_exp: -8
+  rate_exp: -12
+
+publish:
+  schema_version: 1
+  cadence: every_update            # only supported value
+
+health:
+  heartbeat_interval: 1s
+  ttl_multiplier: 3                # ttl = venue cadence * this
+  clock_skew_degraded_ms: 2000
+  clock_skew_stale_ms: 10000
+
+fallback:
+  enabled: true
+  max_concurrent_polls: 4
+  poll_interval: 1s
+  sweep_interval: 5s
+  max_duration: 5m
+
+supervisor:
+  stream_restart_backoff:
+    initial: 500ms
+    max: 60s
+    multiplier: 2.0
+    jitter: full
+  socket_reconnect_backoff:
+    initial: 1s
+    max: 60s
+    multiplier: 2.0
+    jitter: full
+  circuit_breaker:
+    consecutive_failures: 10
+    open_duration: 5m
+  goroutine_leak_timeout: 10s
+
+metadata:
+  refresh_interval: 1h
+  startup_required: true
+  fetch_timeout: 15s
