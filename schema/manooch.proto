@@ -17,8 +17,12 @@ enum MarketType {
 
 enum Channel {
   CHANNEL_UNSPECIFIED = 0;
-  CHANNEL_ORDERBOOK   = 1;
-  CHANNEL_TRADES      = 2;
+
+  // 1 and 2 were CHANNEL_ORDERBOOK and CHANNEL_TRADES. The service is perp
+  // mark price only; a reused number would decode as the retired channel.
+  reserved 1, 2;
+  reserved "CHANNEL_ORDERBOOK", "CHANNEL_TRADES";
+
   CHANNEL_MARK_PRICE  = 3;
   CHANNEL_INDEX_PRICE = 4;
   CHANNEL_FUNDING     = 5;
@@ -37,12 +41,6 @@ enum Status {
   STATUS_HEALTHY     = 1;
   STATUS_DEGRADED    = 2;
   STATUS_STALE       = 3;
-}
-
-enum Side {
-  SIDE_UNSPECIFIED = 0;
-  SIDE_BUY         = 1;
-  SIDE_SELL        = 2;
 }
 
 // ---------- identity ----------
@@ -84,31 +82,6 @@ message Envelope {
 }
 
 // ---------- payloads ----------
-
-message PriceLevel {
-  int64 price = 1;
-  int64 size  = 2;
-}
-
-message OrderBook {
-  Envelope            env   = 1;
-  repeated PriceLevel bids  = 2;   // descending price
-  repeated PriceLevel asks  = 3;   // ascending price
-  uint32              depth = 4;   // actual N delivered
-}
-
-message Trade {
-  string trade_id         = 1;
-  int64  price            = 2;
-  int64  size             = 3;
-  Side   aggressor_side   = 4;
-  int64  exchange_time_ns = 5;
-}
-
-message Trades {
-  Envelope       env    = 1;
-  repeated Trade trades = 2;   // venues batch; preserve venue order
-}
 
 message MarkPrice {
   Envelope env        = 1;

@@ -86,8 +86,6 @@ type Channel int32
 
 const (
 	Channel_CHANNEL_UNSPECIFIED Channel = 0
-	Channel_CHANNEL_ORDERBOOK   Channel = 1
-	Channel_CHANNEL_TRADES      Channel = 2
 	Channel_CHANNEL_MARK_PRICE  Channel = 3
 	Channel_CHANNEL_INDEX_PRICE Channel = 4
 	Channel_CHANNEL_FUNDING     Channel = 5
@@ -99,8 +97,6 @@ const (
 var (
 	Channel_name = map[int32]string{
 		0: "CHANNEL_UNSPECIFIED",
-		1: "CHANNEL_ORDERBOOK",
-		2: "CHANNEL_TRADES",
 		3: "CHANNEL_MARK_PRICE",
 		4: "CHANNEL_INDEX_PRICE",
 		5: "CHANNEL_FUNDING",
@@ -109,8 +105,6 @@ var (
 	}
 	Channel_value = map[string]int32{
 		"CHANNEL_UNSPECIFIED": 0,
-		"CHANNEL_ORDERBOOK":   1,
-		"CHANNEL_TRADES":      2,
 		"CHANNEL_MARK_PRICE":  3,
 		"CHANNEL_INDEX_PRICE": 4,
 		"CHANNEL_FUNDING":     5,
@@ -245,55 +239,6 @@ func (x Status) Number() protoreflect.EnumNumber {
 // Deprecated: Use Status.Descriptor instead.
 func (Status) EnumDescriptor() ([]byte, []int) {
 	return file_manooch_proto_rawDescGZIP(), []int{3}
-}
-
-type Side int32
-
-const (
-	Side_SIDE_UNSPECIFIED Side = 0
-	Side_SIDE_BUY         Side = 1
-	Side_SIDE_SELL        Side = 2
-)
-
-// Enum value maps for Side.
-var (
-	Side_name = map[int32]string{
-		0: "SIDE_UNSPECIFIED",
-		1: "SIDE_BUY",
-		2: "SIDE_SELL",
-	}
-	Side_value = map[string]int32{
-		"SIDE_UNSPECIFIED": 0,
-		"SIDE_BUY":         1,
-		"SIDE_SELL":        2,
-	}
-)
-
-func (x Side) Enum() *Side {
-	p := new(Side)
-	*p = x
-	return p
-}
-
-func (x Side) String() string {
-	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
-}
-
-func (Side) Descriptor() protoreflect.EnumDescriptor {
-	return file_manooch_proto_enumTypes[4].Descriptor()
-}
-
-func (Side) Type() protoreflect.EnumType {
-	return &file_manooch_proto_enumTypes[4]
-}
-
-func (x Side) Number() protoreflect.EnumNumber {
-	return protoreflect.EnumNumber(x)
-}
-
-// Deprecated: Use Side.Descriptor instead.
-func (Side) EnumDescriptor() ([]byte, []int) {
-	return file_manooch_proto_rawDescGZIP(), []int{4}
 }
 
 type Instrument struct {
@@ -552,254 +497,6 @@ func (x *Envelope) GetSizeExp() int32 {
 	return 0
 }
 
-type PriceLevel struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Price         int64                  `protobuf:"varint,1,opt,name=price,proto3" json:"price,omitempty"`
-	Size          int64                  `protobuf:"varint,2,opt,name=size,proto3" json:"size,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *PriceLevel) Reset() {
-	*x = PriceLevel{}
-	mi := &file_manooch_proto_msgTypes[2]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *PriceLevel) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*PriceLevel) ProtoMessage() {}
-
-func (x *PriceLevel) ProtoReflect() protoreflect.Message {
-	mi := &file_manooch_proto_msgTypes[2]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use PriceLevel.ProtoReflect.Descriptor instead.
-func (*PriceLevel) Descriptor() ([]byte, []int) {
-	return file_manooch_proto_rawDescGZIP(), []int{2}
-}
-
-func (x *PriceLevel) GetPrice() int64 {
-	if x != nil {
-		return x.Price
-	}
-	return 0
-}
-
-func (x *PriceLevel) GetSize() int64 {
-	if x != nil {
-		return x.Size
-	}
-	return 0
-}
-
-type OrderBook struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Env           *Envelope              `protobuf:"bytes,1,opt,name=env,proto3" json:"env,omitempty"`
-	Bids          []*PriceLevel          `protobuf:"bytes,2,rep,name=bids,proto3" json:"bids,omitempty"`    // descending price
-	Asks          []*PriceLevel          `protobuf:"bytes,3,rep,name=asks,proto3" json:"asks,omitempty"`    // ascending price
-	Depth         uint32                 `protobuf:"varint,4,opt,name=depth,proto3" json:"depth,omitempty"` // actual N delivered
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *OrderBook) Reset() {
-	*x = OrderBook{}
-	mi := &file_manooch_proto_msgTypes[3]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *OrderBook) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*OrderBook) ProtoMessage() {}
-
-func (x *OrderBook) ProtoReflect() protoreflect.Message {
-	mi := &file_manooch_proto_msgTypes[3]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use OrderBook.ProtoReflect.Descriptor instead.
-func (*OrderBook) Descriptor() ([]byte, []int) {
-	return file_manooch_proto_rawDescGZIP(), []int{3}
-}
-
-func (x *OrderBook) GetEnv() *Envelope {
-	if x != nil {
-		return x.Env
-	}
-	return nil
-}
-
-func (x *OrderBook) GetBids() []*PriceLevel {
-	if x != nil {
-		return x.Bids
-	}
-	return nil
-}
-
-func (x *OrderBook) GetAsks() []*PriceLevel {
-	if x != nil {
-		return x.Asks
-	}
-	return nil
-}
-
-func (x *OrderBook) GetDepth() uint32 {
-	if x != nil {
-		return x.Depth
-	}
-	return 0
-}
-
-type Trade struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	TradeId        string                 `protobuf:"bytes,1,opt,name=trade_id,json=tradeId,proto3" json:"trade_id,omitempty"`
-	Price          int64                  `protobuf:"varint,2,opt,name=price,proto3" json:"price,omitempty"`
-	Size           int64                  `protobuf:"varint,3,opt,name=size,proto3" json:"size,omitempty"`
-	AggressorSide  Side                   `protobuf:"varint,4,opt,name=aggressor_side,json=aggressorSide,proto3,enum=manooch.v1.Side" json:"aggressor_side,omitempty"`
-	ExchangeTimeNs int64                  `protobuf:"varint,5,opt,name=exchange_time_ns,json=exchangeTimeNs,proto3" json:"exchange_time_ns,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
-}
-
-func (x *Trade) Reset() {
-	*x = Trade{}
-	mi := &file_manooch_proto_msgTypes[4]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *Trade) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*Trade) ProtoMessage() {}
-
-func (x *Trade) ProtoReflect() protoreflect.Message {
-	mi := &file_manooch_proto_msgTypes[4]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use Trade.ProtoReflect.Descriptor instead.
-func (*Trade) Descriptor() ([]byte, []int) {
-	return file_manooch_proto_rawDescGZIP(), []int{4}
-}
-
-func (x *Trade) GetTradeId() string {
-	if x != nil {
-		return x.TradeId
-	}
-	return ""
-}
-
-func (x *Trade) GetPrice() int64 {
-	if x != nil {
-		return x.Price
-	}
-	return 0
-}
-
-func (x *Trade) GetSize() int64 {
-	if x != nil {
-		return x.Size
-	}
-	return 0
-}
-
-func (x *Trade) GetAggressorSide() Side {
-	if x != nil {
-		return x.AggressorSide
-	}
-	return Side_SIDE_UNSPECIFIED
-}
-
-func (x *Trade) GetExchangeTimeNs() int64 {
-	if x != nil {
-		return x.ExchangeTimeNs
-	}
-	return 0
-}
-
-type Trades struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Env           *Envelope              `protobuf:"bytes,1,opt,name=env,proto3" json:"env,omitempty"`
-	Trades        []*Trade               `protobuf:"bytes,2,rep,name=trades,proto3" json:"trades,omitempty"` // venues batch; preserve venue order
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *Trades) Reset() {
-	*x = Trades{}
-	mi := &file_manooch_proto_msgTypes[5]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *Trades) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*Trades) ProtoMessage() {}
-
-func (x *Trades) ProtoReflect() protoreflect.Message {
-	mi := &file_manooch_proto_msgTypes[5]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use Trades.ProtoReflect.Descriptor instead.
-func (*Trades) Descriptor() ([]byte, []int) {
-	return file_manooch_proto_rawDescGZIP(), []int{5}
-}
-
-func (x *Trades) GetEnv() *Envelope {
-	if x != nil {
-		return x.Env
-	}
-	return nil
-}
-
-func (x *Trades) GetTrades() []*Trade {
-	if x != nil {
-		return x.Trades
-	}
-	return nil
-}
-
 type MarkPrice struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Env           *Envelope              `protobuf:"bytes,1,opt,name=env,proto3" json:"env,omitempty"`
@@ -810,7 +507,7 @@ type MarkPrice struct {
 
 func (x *MarkPrice) Reset() {
 	*x = MarkPrice{}
-	mi := &file_manooch_proto_msgTypes[6]
+	mi := &file_manooch_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -822,7 +519,7 @@ func (x *MarkPrice) String() string {
 func (*MarkPrice) ProtoMessage() {}
 
 func (x *MarkPrice) ProtoReflect() protoreflect.Message {
-	mi := &file_manooch_proto_msgTypes[6]
+	mi := &file_manooch_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -835,7 +532,7 @@ func (x *MarkPrice) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MarkPrice.ProtoReflect.Descriptor instead.
 func (*MarkPrice) Descriptor() ([]byte, []int) {
-	return file_manooch_proto_rawDescGZIP(), []int{6}
+	return file_manooch_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *MarkPrice) GetEnv() *Envelope {
@@ -862,7 +559,7 @@ type IndexPrice struct {
 
 func (x *IndexPrice) Reset() {
 	*x = IndexPrice{}
-	mi := &file_manooch_proto_msgTypes[7]
+	mi := &file_manooch_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -874,7 +571,7 @@ func (x *IndexPrice) String() string {
 func (*IndexPrice) ProtoMessage() {}
 
 func (x *IndexPrice) ProtoReflect() protoreflect.Message {
-	mi := &file_manooch_proto_msgTypes[7]
+	mi := &file_manooch_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -887,7 +584,7 @@ func (x *IndexPrice) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IndexPrice.ProtoReflect.Descriptor instead.
 func (*IndexPrice) Descriptor() ([]byte, []int) {
-	return file_manooch_proto_rawDescGZIP(), []int{7}
+	return file_manooch_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *IndexPrice) GetEnv() *Envelope {
@@ -916,7 +613,7 @@ type Funding struct {
 
 func (x *Funding) Reset() {
 	*x = Funding{}
-	mi := &file_manooch_proto_msgTypes[8]
+	mi := &file_manooch_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -928,7 +625,7 @@ func (x *Funding) String() string {
 func (*Funding) ProtoMessage() {}
 
 func (x *Funding) ProtoReflect() protoreflect.Message {
-	mi := &file_manooch_proto_msgTypes[8]
+	mi := &file_manooch_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -941,7 +638,7 @@ func (x *Funding) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Funding.ProtoReflect.Descriptor instead.
 func (*Funding) Descriptor() ([]byte, []int) {
-	return file_manooch_proto_rawDescGZIP(), []int{8}
+	return file_manooch_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *Funding) GetEnv() *Envelope {
@@ -989,7 +686,7 @@ type InstrumentMeta struct {
 
 func (x *InstrumentMeta) Reset() {
 	*x = InstrumentMeta{}
-	mi := &file_manooch_proto_msgTypes[9]
+	mi := &file_manooch_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1001,7 +698,7 @@ func (x *InstrumentMeta) String() string {
 func (*InstrumentMeta) ProtoMessage() {}
 
 func (x *InstrumentMeta) ProtoReflect() protoreflect.Message {
-	mi := &file_manooch_proto_msgTypes[9]
+	mi := &file_manooch_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1014,7 +711,7 @@ func (x *InstrumentMeta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InstrumentMeta.ProtoReflect.Descriptor instead.
 func (*InstrumentMeta) Descriptor() ([]byte, []int) {
-	return file_manooch_proto_rawDescGZIP(), []int{9}
+	return file_manooch_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *InstrumentMeta) GetEnv() *Envelope {
@@ -1097,7 +794,7 @@ type Health struct {
 
 func (x *Health) Reset() {
 	*x = Health{}
-	mi := &file_manooch_proto_msgTypes[10]
+	mi := &file_manooch_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1109,7 +806,7 @@ func (x *Health) String() string {
 func (*Health) ProtoMessage() {}
 
 func (x *Health) ProtoReflect() protoreflect.Message {
-	mi := &file_manooch_proto_msgTypes[10]
+	mi := &file_manooch_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1122,7 +819,7 @@ func (x *Health) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Health.ProtoReflect.Descriptor instead.
 func (*Health) Descriptor() ([]byte, []int) {
-	return file_manooch_proto_rawDescGZIP(), []int{10}
+	return file_manooch_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *Health) GetEnv() *Envelope {
@@ -1226,25 +923,7 @@ const file_manooch_proto_rawDesc = "" +
 	"\rstatus_reason\x18\r \x01(\tR\fstatusReason\x12%\n" +
 	"\x0eschema_version\x18\x0e \x01(\rR\rschemaVersion\x12\x1b\n" +
 	"\tprice_exp\x18\x0f \x01(\x05R\bpriceExp\x12\x19\n" +
-	"\bsize_exp\x18\x10 \x01(\x05R\asizeExp\"6\n" +
-	"\n" +
-	"PriceLevel\x12\x14\n" +
-	"\x05price\x18\x01 \x01(\x03R\x05price\x12\x12\n" +
-	"\x04size\x18\x02 \x01(\x03R\x04size\"\xa1\x01\n" +
-	"\tOrderBook\x12&\n" +
-	"\x03env\x18\x01 \x01(\v2\x14.manooch.v1.EnvelopeR\x03env\x12*\n" +
-	"\x04bids\x18\x02 \x03(\v2\x16.manooch.v1.PriceLevelR\x04bids\x12*\n" +
-	"\x04asks\x18\x03 \x03(\v2\x16.manooch.v1.PriceLevelR\x04asks\x12\x14\n" +
-	"\x05depth\x18\x04 \x01(\rR\x05depth\"\xaf\x01\n" +
-	"\x05Trade\x12\x19\n" +
-	"\btrade_id\x18\x01 \x01(\tR\atradeId\x12\x14\n" +
-	"\x05price\x18\x02 \x01(\x03R\x05price\x12\x12\n" +
-	"\x04size\x18\x03 \x01(\x03R\x04size\x127\n" +
-	"\x0eaggressor_side\x18\x04 \x01(\x0e2\x10.manooch.v1.SideR\raggressorSide\x12(\n" +
-	"\x10exchange_time_ns\x18\x05 \x01(\x03R\x0eexchangeTimeNs\"[\n" +
-	"\x06Trades\x12&\n" +
-	"\x03env\x18\x01 \x01(\v2\x14.manooch.v1.EnvelopeR\x03env\x12)\n" +
-	"\x06trades\x18\x02 \x03(\v2\x11.manooch.v1.TradeR\x06trades\"R\n" +
+	"\bsize_exp\x18\x10 \x01(\x05R\asizeExp\"R\n" +
 	"\tMarkPrice\x12&\n" +
 	"\x03env\x18\x01 \x01(\v2\x14.manooch.v1.EnvelopeR\x03env\x12\x1d\n" +
 	"\n" +
@@ -1287,16 +966,14 @@ const file_manooch_proto_rawDesc = "" +
 	"\x17MARKET_TYPE_PERP_LINEAR\x10\x03\x12\x1c\n" +
 	"\x18MARKET_TYPE_PERP_INVERSE\x10\x04\x12\x1d\n" +
 	"\x19MARKET_TYPE_FUTURE_LINEAR\x10\x05\x12\x1e\n" +
-	"\x1aMARKET_TYPE_FUTURE_INVERSE\x10\x06*\xbd\x01\n" +
+	"\x1aMARKET_TYPE_FUTURE_INVERSE\x10\x06*\xc1\x01\n" +
 	"\aChannel\x12\x17\n" +
-	"\x13CHANNEL_UNSPECIFIED\x10\x00\x12\x15\n" +
-	"\x11CHANNEL_ORDERBOOK\x10\x01\x12\x12\n" +
-	"\x0eCHANNEL_TRADES\x10\x02\x12\x16\n" +
+	"\x13CHANNEL_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12CHANNEL_MARK_PRICE\x10\x03\x12\x17\n" +
 	"\x13CHANNEL_INDEX_PRICE\x10\x04\x12\x13\n" +
 	"\x0fCHANNEL_FUNDING\x10\x05\x12\x14\n" +
 	"\x10CHANNEL_METADATA\x10\x06\x12\x12\n" +
-	"\x0eCHANNEL_HEALTH\x10\a*G\n" +
+	"\x0eCHANNEL_HEALTH\x10\a\"\x04\b\x01\x10\x01\"\x04\b\x02\x10\x02*\x11CHANNEL_ORDERBOOK*\x0eCHANNEL_TRADES*G\n" +
 	"\x06Source\x12\x16\n" +
 	"\x12SOURCE_UNSPECIFIED\x10\x00\x12\x14\n" +
 	"\x10SOURCE_WEBSOCKET\x10\x01\x12\x0f\n" +
@@ -1305,11 +982,7 @@ const file_manooch_proto_rawDesc = "" +
 	"\x12STATUS_UNSPECIFIED\x10\x00\x12\x12\n" +
 	"\x0eSTATUS_HEALTHY\x10\x01\x12\x13\n" +
 	"\x0fSTATUS_DEGRADED\x10\x02\x12\x10\n" +
-	"\fSTATUS_STALE\x10\x03*9\n" +
-	"\x04Side\x12\x14\n" +
-	"\x10SIDE_UNSPECIFIED\x10\x00\x12\f\n" +
-	"\bSIDE_BUY\x10\x01\x12\r\n" +
-	"\tSIDE_SELL\x10\x02B0Z.github.com/you/manooch/gen/manoochv1;manoochv1b\x06proto3"
+	"\fSTATUS_STALE\x10\x03B0Z.github.com/you/manooch/gen/manoochv1;manoochv1b\x06proto3"
 
 var (
 	file_manooch_proto_rawDescOnce sync.Once
@@ -1323,49 +996,38 @@ func file_manooch_proto_rawDescGZIP() []byte {
 	return file_manooch_proto_rawDescData
 }
 
-var file_manooch_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
-var file_manooch_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_manooch_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
+var file_manooch_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_manooch_proto_goTypes = []any{
 	(MarketType)(0),        // 0: manooch.v1.MarketType
 	(Channel)(0),           // 1: manooch.v1.Channel
 	(Source)(0),            // 2: manooch.v1.Source
 	(Status)(0),            // 3: manooch.v1.Status
-	(Side)(0),              // 4: manooch.v1.Side
-	(*Instrument)(nil),     // 5: manooch.v1.Instrument
-	(*Envelope)(nil),       // 6: manooch.v1.Envelope
-	(*PriceLevel)(nil),     // 7: manooch.v1.PriceLevel
-	(*OrderBook)(nil),      // 8: manooch.v1.OrderBook
-	(*Trade)(nil),          // 9: manooch.v1.Trade
-	(*Trades)(nil),         // 10: manooch.v1.Trades
-	(*MarkPrice)(nil),      // 11: manooch.v1.MarkPrice
-	(*IndexPrice)(nil),     // 12: manooch.v1.IndexPrice
-	(*Funding)(nil),        // 13: manooch.v1.Funding
-	(*InstrumentMeta)(nil), // 14: manooch.v1.InstrumentMeta
-	(*Health)(nil),         // 15: manooch.v1.Health
+	(*Instrument)(nil),     // 4: manooch.v1.Instrument
+	(*Envelope)(nil),       // 5: manooch.v1.Envelope
+	(*MarkPrice)(nil),      // 6: manooch.v1.MarkPrice
+	(*IndexPrice)(nil),     // 7: manooch.v1.IndexPrice
+	(*Funding)(nil),        // 8: manooch.v1.Funding
+	(*InstrumentMeta)(nil), // 9: manooch.v1.InstrumentMeta
+	(*Health)(nil),         // 10: manooch.v1.Health
 }
 var file_manooch_proto_depIdxs = []int32{
 	0,  // 0: manooch.v1.Instrument.market_type:type_name -> manooch.v1.MarketType
-	5,  // 1: manooch.v1.Envelope.instrument:type_name -> manooch.v1.Instrument
+	4,  // 1: manooch.v1.Envelope.instrument:type_name -> manooch.v1.Instrument
 	1,  // 2: manooch.v1.Envelope.channel:type_name -> manooch.v1.Channel
 	2,  // 3: manooch.v1.Envelope.source:type_name -> manooch.v1.Source
 	3,  // 4: manooch.v1.Envelope.status:type_name -> manooch.v1.Status
-	6,  // 5: manooch.v1.OrderBook.env:type_name -> manooch.v1.Envelope
-	7,  // 6: manooch.v1.OrderBook.bids:type_name -> manooch.v1.PriceLevel
-	7,  // 7: manooch.v1.OrderBook.asks:type_name -> manooch.v1.PriceLevel
-	4,  // 8: manooch.v1.Trade.aggressor_side:type_name -> manooch.v1.Side
-	6,  // 9: manooch.v1.Trades.env:type_name -> manooch.v1.Envelope
-	9,  // 10: manooch.v1.Trades.trades:type_name -> manooch.v1.Trade
-	6,  // 11: manooch.v1.MarkPrice.env:type_name -> manooch.v1.Envelope
-	6,  // 12: manooch.v1.IndexPrice.env:type_name -> manooch.v1.Envelope
-	6,  // 13: manooch.v1.Funding.env:type_name -> manooch.v1.Envelope
-	6,  // 14: manooch.v1.InstrumentMeta.env:type_name -> manooch.v1.Envelope
-	6,  // 15: manooch.v1.Health.env:type_name -> manooch.v1.Envelope
-	3,  // 16: manooch.v1.Health.status:type_name -> manooch.v1.Status
-	17, // [17:17] is the sub-list for method output_type
-	17, // [17:17] is the sub-list for method input_type
-	17, // [17:17] is the sub-list for extension type_name
-	17, // [17:17] is the sub-list for extension extendee
-	0,  // [0:17] is the sub-list for field type_name
+	5,  // 5: manooch.v1.MarkPrice.env:type_name -> manooch.v1.Envelope
+	5,  // 6: manooch.v1.IndexPrice.env:type_name -> manooch.v1.Envelope
+	5,  // 7: manooch.v1.Funding.env:type_name -> manooch.v1.Envelope
+	5,  // 8: manooch.v1.InstrumentMeta.env:type_name -> manooch.v1.Envelope
+	5,  // 9: manooch.v1.Health.env:type_name -> manooch.v1.Envelope
+	3,  // 10: manooch.v1.Health.status:type_name -> manooch.v1.Status
+	11, // [11:11] is the sub-list for method output_type
+	11, // [11:11] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_manooch_proto_init() }
@@ -1378,8 +1040,8 @@ func file_manooch_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_manooch_proto_rawDesc), len(file_manooch_proto_rawDesc)),
-			NumEnums:      5,
-			NumMessages:   11,
+			NumEnums:      4,
+			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

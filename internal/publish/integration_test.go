@@ -97,7 +97,7 @@ func newPublisher(t *testing.T) *publish.RedisPublisher {
 		PoolSize:      8,
 		Venue:         "TESTVENUE",
 		InstanceID:    fmt.Sprintf("instance-%d", time.Now().UnixNano()),
-		SchemaVersion: 1,
+		SchemaVersion: 2,
 		Metrics:       obs.NewMetrics(),
 		Logger:        slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})),
 	})
@@ -179,8 +179,8 @@ func TestPublishWritesKeyAndChannel(t *testing.T) {
 	if env.InstanceId == "" {
 		t.Error("instance_id not set")
 	}
-	if env.SchemaVersion != 1 {
-		t.Errorf("schema_version = %d, want 1", env.SchemaVersion)
+	if env.SchemaVersion != 2 {
+		t.Errorf("schema_version = %d, want 2", env.SchemaVersion)
 	}
 	if env.PublishTimeNs < env.RecvTimeNs {
 		t.Errorf("publish_time_ns %d precedes recv_time_ns %d", env.PublishTimeNs, env.RecvTimeNs)
