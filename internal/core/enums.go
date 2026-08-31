@@ -37,7 +37,7 @@ func ParseMarketType(s string) (pb.MarketType, error) {
 }
 
 // ChannelName renders a Channel the way it appears in config files and Redis
-// keys: "orderbook", "mark_price".
+// keys: "mark_price", "index_price".
 func ChannelName(ch pb.Channel) string {
 	name, ok := pb.Channel_name[int32(ch)]
 	if !ok {
