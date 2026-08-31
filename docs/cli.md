@@ -4,7 +4,7 @@ Three binaries. Flags come from the standard library `flag` package; there is no
 
 | File | Holds |
 |---|---|
-| `manooch-feed/main.go` | `run` — flags, config, `--validate`, startup, shutdown; `printResolved` |
+| `manooch-feed/main.go` | `run` and its steps — `parseFlags`, `dialRedis`, `serveAdmin`, `startProducers`, `shutdown`, `printResolved` |
 | `manooch-feed/http.go` | `newMux` — the admin surface |
 | `manooch-tap/main.go` | Subscribe, decode, gap detection, `summarize`, `--raw` output |
 | `manooch-status/main.go` | `scanKeys`, `readRows`, table formatting, colour |
@@ -13,7 +13,7 @@ Three binaries. Flags come from the standard library `flag` package; there is no
 
 `--exchange` (required, must already be upper case), `--config` (`./config`), `--validate`, `--synthetic`.
 
-Startup: parse flags → `config.Load` → if `--validate`, print and return → logger and metrics → `uuid.NewString()` for `instance_id` → `publish.NewRedis` → `net.Listen` then `Serve` in a goroutine → optionally start `synth` → block on `os.Interrupt`/`SIGTERM` → shut down HTTP, wait for the generator, close Redis, all under a 10s deadline.
+`run` orchestrates: `parseFlags` → `config.Load` → if `--validate`, print and return → logger and metrics → `uuid.NewString()` for `instance_id` → `dialRedis` → `serveAdmin` → `startProducers` → block on `os.Interrupt`/`SIGTERM` → `shutdown`, which stops HTTP, waits for the producers and closes Redis under a 10s deadline.
 
 Routes: `GET /healthz` (JSON: status, venue, instance_id, uptime), `GET /metrics`, `/debug/pprof/*`. **No market-data route** — consumers read Redis, and a second path would be a second contract that disagrees with the first the moment either changes.
 

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -39,31 +40,46 @@ func main() {
 	}
 }
 
-func run() error {
-	var (
-		exchange  = flag.String("exchange", "", "venue to run, upper case (required)")
-		configDir = flag.String("config", "./config", "directory holding defaults.yaml and venues/")
-		validate  = flag.Bool("validate", false, "load and validate config, print the resolved config, exit")
-		synthetic = flag.Bool("synthetic", false, "dev only: publish generated data instead of connecting to a venue")
-	)
+// flags is the parsed command line.
+type flags struct {
+	exchange  string
+	configDir string
+	validate  bool
+	synthetic bool
+}
+
+func parseFlags() (flags, error) {
+	var f flags
+	flag.StringVar(&f.exchange, "exchange", "", "venue to run, upper case (required)")
+	flag.StringVar(&f.configDir, "config", "./config", "directory holding defaults.yaml and venues/")
+	flag.BoolVar(&f.validate, "validate", false, "load and validate config, print the resolved config, exit")
+	flag.BoolVar(&f.synthetic, "synthetic", false, "dev only: publish generated data instead of connecting to a venue")
 	flag.Parse()
 
-	if *exchange == "" {
-		return errors.New("--exchange is required")
+	if f.exchange == "" {
+		return f, errors.New("--exchange is required")
 	}
-	if *exchange != strings.ToUpper(*exchange) {
-		return fmt.Errorf("--exchange must be upper case, got %q", *exchange)
+	if f.exchange != strings.ToUpper(f.exchange) {
+		return f, fmt.Errorf("--exchange must be upper case, got %q", f.exchange)
+	}
+	return f, nil
+}
+
+func run() error {
+	f, err := parseFlags()
+	if err != nil {
+		return err
 	}
 
-	cfg, err := config.Load(*configDir, *exchange)
+	cfg, err := config.Load(f.configDir, f.exchange)
 	if err != nil {
 		return err
 	}
 
 	// Opens nothing — no Redis connection, no listener — so it is safe to run
 	// against production config from anywhere.
-	if *validate {
-		return printResolved(os.Stdout, cfg, *configDir)
+	if f.validate {
+		return printResolved(os.Stdout, cfg, f.configDir)
 	}
 
 	logger, err := obs.NewLogger(os.Stdout, cfg.Service.LogLevel, cfg.Venue)
@@ -79,16 +95,42 @@ func run() error {
 
 	logger.Info("starting",
 		"instance_id", instanceID,
-		"config_dir", *configDir,
+		"config_dir", f.configDir,
 		"enabled", cfg.Enabled,
-		"synthetic", *synthetic,
+		"synthetic", f.synthetic,
 		"streams", len(cfg.Streams()))
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	dialCtx, cancelDial := context.WithTimeout(ctx, cfg.Redis.DialTimeout.Std())
-	pub, err := publish.NewRedis(dialCtx, publish.Options{
+	pub, err := dialRedis(ctx, cfg, instanceID, metrics, logger)
+	if err != nil {
+		return err
+	}
+	logger.Info("redis connected", "addr", cfg.Redis.Addr, "db", cfg.Redis.DB)
+
+	srv, err := serveAdmin(cfg, metrics, instanceID, started, logger)
+	if err != nil {
+		pub.Close()
+		return err
+	}
+
+	producers := startProducers(ctx, f, cfg, pub, logger)
+
+	<-ctx.Done()
+	logger.Info("shutting down")
+	shutdown(srv, pub, producers, cfg, metrics, logger)
+	logger.Info("stopped")
+	return nil
+}
+
+// dialRedis connects the publisher, bounded by the configured dial timeout.
+// Redis is not optional: a feed that cannot publish has nothing to do.
+func dialRedis(ctx context.Context, cfg *config.Config, instanceID string, metrics *obs.Metrics, logger *slog.Logger) (*publish.RedisPublisher, error) {
+	dialCtx, cancel := context.WithTimeout(ctx, cfg.Redis.DialTimeout.Std())
+	defer cancel()
+
+	return publish.NewRedis(dialCtx, publish.Options{
 		Addr:          cfg.Redis.Addr,
 		DB:            cfg.Redis.DB,
 		DialTimeout:   cfg.Redis.DialTimeout.Std(),
@@ -100,63 +142,73 @@ func run() error {
 		Metrics:       metrics,
 		Logger:        logger,
 	})
-	cancelDial()
+}
+
+// serveAdmin binds the admin surface and serves it in the background, returning
+// a nil server when HTTP is disabled.
+//
+// The listener is opened synchronously: otherwise a port clash is a log line in
+// a process that keeps running with no metrics and no /healthz.
+func serveAdmin(cfg *config.Config, metrics *obs.Metrics, instanceID string, started time.Time, logger *slog.Logger) (*http.Server, error) {
+	if !cfg.Service.HTTP.Enabled {
+		return nil, nil
+	}
+
+	ln, err := net.Listen("tcp", cfg.Service.HTTP.Listen)
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("http listen: %w", err)
 	}
-	defer pub.Close()
-	logger.Info("redis connected", "addr", cfg.Redis.Addr, "db", cfg.Redis.DB)
-
-	var srv *http.Server
-	if cfg.Service.HTTP.Enabled {
-		// Bind synchronously: otherwise a port clash is a log line in a process
-		// that keeps running with no metrics and no /healthz.
-		ln, err := net.Listen("tcp", cfg.Service.HTTP.Listen)
-		if err != nil {
-			return fmt.Errorf("http listen: %w", err)
-		}
-		srv = &http.Server{
-			Handler:           newMux(metrics, cfg.Venue, instanceID, started),
-			ReadHeaderTimeout: 5 * time.Second,
-		}
-		go func() {
-			if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				logger.Error("http server stopped", "error", err.Error())
-			}
-		}()
-		logger.Info("http listening", "addr", ln.Addr().String())
+	srv := &http.Server{
+		Handler:           newMux(metrics, cfg.Venue, instanceID, started),
+		ReadHeaderTimeout: 5 * time.Second,
 	}
+	go func() {
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Error("http server stopped", "error", err.Error())
+		}
+	}()
+	logger.Info("http listening", "addr", ln.Addr().String())
+	return srv, nil
+}
 
+// startProducers launches whatever feeds the publisher and returns a group that
+// closes when they have all stopped. At M0 the only producer is the synthetic
+// generator; a venue adapter takes its place in M1.
+func startProducers(ctx context.Context, f flags, cfg *config.Config, pub publish.Publisher, logger *slog.Logger) *sync.WaitGroup {
 	var wg sync.WaitGroup
-	if *synthetic {
-		logger.Warn("synthetic mode: publishing generated data, not venue data")
-		gen := synth.New(cfg, pub, logger)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			gen.Run(ctx)
-		}()
-	} else {
+	if !f.synthetic {
 		logger.Info("no venue adapter in this build: serving /healthz and idling until M1")
+		return &wg
 	}
 
-	<-ctx.Done()
-	logger.Info("shutting down")
+	logger.Warn("synthetic mode: publishing generated data, not venue data")
+	gen := synth.New(cfg, pub, logger)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		gen.Run(ctx)
+	}()
+	return &wg
+}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownDeadline)
+// shutdown stops everything under one deadline. Redis closes last, after the
+// producers have drained, so their in-flight publishes do not fail on the way
+// out and log an error that means nothing.
+func shutdown(srv *http.Server, pub *publish.RedisPublisher, producers *sync.WaitGroup, cfg *config.Config, metrics *obs.Metrics, logger *slog.Logger) {
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownDeadline)
 	defer cancel()
 
 	if srv != nil {
-		if err := srv.Shutdown(shutdownCtx); err != nil {
+		if err := srv.Shutdown(ctx); err != nil {
 			logger.Error("http shutdown", "error", err.Error())
 		}
 	}
 
 	done := make(chan struct{})
-	go func() { wg.Wait(); close(done) }()
+	go func() { producers.Wait(); close(done) }()
 	select {
 	case <-done:
-	case <-shutdownCtx.Done():
+	case <-ctx.Done():
 		// A goroutine past the deadline is holding something the next start
 		// will contend with.
 		logger.Error("shutdown deadline exceeded, goroutines still running")
@@ -166,8 +218,6 @@ func run() error {
 	if err := pub.Close(); err != nil {
 		logger.Error("redis close", "error", err.Error())
 	}
-	logger.Info("stopped")
-	return nil
 }
 
 // printResolved writes the merged config and the exact set of Redis keys it
