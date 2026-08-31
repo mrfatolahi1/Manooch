@@ -1,0 +1,8 @@
+{
+  "error": {
+    "kind": "json",
+    "channel": "unspecified",
+    "message": "parse json: frame is not json: unexpected end of JSON input"
+  },
+  "messages": []
+}

@@ -1,0 +1,78 @@
+{
+  "error": null,
+  "messages": [
+    {
+      "key": "Manooch:BINANCE:PERP_LINEAR:BTC_USDT:mark_price",
+      "channel": "mark_price",
+      "ttl": "3s",
+      "payload": {
+        "env": {
+          "channel": "CHANNEL_MARK_PRICE",
+          "exchangeTimeNs": "1562305380000000000",
+          "instrument": {
+            "base": "BTC",
+            "canonical": "BTC_USDT",
+            "marketType": "MARKET_TYPE_PERP_LINEAR",
+            "quote": "USDT",
+            "settle": "USDT",
+            "venueSymbol": "BTCUSDT"
+          },
+          "recvTimeNs": "1562305380123456789",
+          "source": "SOURCE_WEBSOCKET",
+          "status": "STATUS_HEALTHY",
+          "venue": "BINANCE"
+        },
+        "markPrice": "1179415000000000"
+      }
+    },
+    {
+      "key": "Manooch:BINANCE:PERP_LINEAR:BTC_USDT:index_price",
+      "channel": "index_price",
+      "ttl": "3s",
+      "payload": {
+        "env": {
+          "channel": "CHANNEL_INDEX_PRICE",
+          "exchangeTimeNs": "1562305380000000000",
+          "instrument": {
+            "base": "BTC",
+            "canonical": "BTC_USDT",
+            "marketType": "MARKET_TYPE_PERP_LINEAR",
+            "quote": "USDT",
+            "settle": "USDT",
+            "venueSymbol": "BTCUSDT"
+          },
+          "recvTimeNs": "1562305380123456789",
+          "source": "SOURCE_WEBSOCKET",
+          "status": "STATUS_HEALTHY",
+          "venue": "BINANCE"
+        },
+        "indexPrice": "1178462659091000"
+      }
+    },
+    {
+      "key": "Manooch:BINANCE:PERP_LINEAR:BTC_USDT:funding",
+      "channel": "funding",
+      "ttl": "3s",
+      "payload": {
+        "env": {
+          "channel": "CHANNEL_FUNDING",
+          "exchangeTimeNs": "1562305380000000000",
+          "instrument": {
+            "base": "BTC",
+            "canonical": "BTC_USDT",
+            "marketType": "MARKET_TYPE_PERP_LINEAR",
+            "quote": "USDT",
+            "settle": "USDT",
+            "venueSymbol": "BTCUSDT"
+          },
+          "recvTimeNs": "1562305380123456789",
+          "source": "SOURCE_WEBSOCKET",
+          "status": "STATUS_HEALTHY",
+          "venue": "BINANCE"
+        },
+        "fundingRate": "381670000",
+        "nextFundingTimeNs": "1562306400000000000"
+      }
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "error": {
+    "kind": "venue",
+    "channel": "unspecified",
+    "message": "parse venue: venue error -1121: Invalid symbol."
+  },
+  "messages": []
+}

@@ -1,0 +1,9 @@
+{
+  "error": {
+    "kind": "field",
+    "channel": "unspecified",
+    "symbol": "DOGEXYZ",
+    "message": "parse field DOGEXYZ: symbol: binance: \"DOGEXYZ\" ends in no known quote asset"
+  },
+  "messages": []
+}

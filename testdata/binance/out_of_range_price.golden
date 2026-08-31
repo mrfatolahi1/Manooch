@@ -1,0 +1,9 @@
+{
+  "error": {
+    "kind": "range",
+    "channel": "mark_price",
+    "symbol": "BTCUSDT",
+    "message": "parse range BTCUSDT: field \"p\" = \"99999999999.00000000\": price: value out of range for the scale"
+  },
+  "messages": []
+}

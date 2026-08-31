@@ -1,0 +1,9 @@
+{
+  "error": {
+    "kind": "field",
+    "channel": "unspecified",
+    "symbol": "BTCUSDT",
+    "message": "parse field BTCUSDT: unhandled event type \"aggTrade\""
+  },
+  "messages": []
+}
