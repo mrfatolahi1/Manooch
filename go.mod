@@ -3,6 +3,7 @@ module github.com/you/manooch
 go 1.27.0
 
 require (
+	github.com/coder/websocket v1.8.15
 	github.com/go-playground/validator/v10 v10.30.3
 	github.com/google/uuid v1.6.0
 	github.com/ory/dockertest/v3 v3.12.0
@@ -39,7 +40,6 @@ require (
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.0 // indirect
 	github.com/opencontainers/runc v1.2.3 // indirect
-	github.com/ory/dockertest/v3 v3.12.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.70.1 // indirect
