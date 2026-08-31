@@ -1,4 +1,4 @@
-venue: BYBIT
+venue: BINANCE
 enabled: true
 
 endpoints:
@@ -27,7 +27,6 @@ quirks:
   cadence:
     mark_price:  1s
     index_price: 1s
-    funding:     1s
 
 symbol_overrides:
   BTC_USDT: BTCUSDT

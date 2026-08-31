@@ -166,6 +166,7 @@ func (c *Config) validate(p *provenance) error {
 	errs = append(errs, c.validateHTTP(p)...)
 	errs = append(errs, c.validateHealth(p)...)
 	errs = append(errs, c.validateEndpoints(p)...)
+	errs = append(errs, c.validateCadence(p)...)
 	errs = append(errs, c.validateSymbolOverrides(p)...)
 	errs = append(errs, c.resolveInstruments(p)...)
 
@@ -246,6 +247,30 @@ func (c *Config) validateEndpoints(p *provenance) []error {
 	return errs
 }
 
+// validateCadence checks every quirks.cadence key names a real channel and
+// carries a positive duration. The cadence is what a stream's key TTL is
+// derived from, so a missing or zero one publishes a key that expires
+// immediately and reports a healthy stream as dead.
+func (c *Config) validateCadence(p *provenance) []error {
+	var errs []error
+	// Sorted so several broken entries report in a stable order.
+	for _, name := range slices.Sorted(maps.Keys(c.Quirks.Cadence)) {
+		key := "quirks.cadence." + name
+		ch, err := core.ParseChannel(name)
+		if err != nil {
+			errs = append(errs, p.errf(key, "%v", err))
+			continue
+		}
+		if core.ChannelName(ch) != name {
+			errs = append(errs, p.errf(key, "channel %q must be lower snake case", name))
+		}
+		if c.Quirks.Cadence[name] <= 0 {
+			errs = append(errs, p.errf(key, "must be greater than 0, got %s", c.Quirks.Cadence[name]))
+		}
+	}
+	return errs
+}
+
 func (c *Config) validateSymbolOverrides(p *provenance) []error {
 	var errs []error
 	for _, canonical := range slices.Sorted(maps.Keys(c.SymbolOverrides)) {
@@ -304,6 +329,12 @@ func (c *Config) resolveInstruments(p *provenance) []error {
 			if slices.Contains(in.Chans, ch) {
 				errs = append(errs, p.errf(key, "channel %q is listed twice", name))
 				continue
+			}
+			// Without a cadence there is no TTL, and a key with no TTL cannot
+			// say whether it is fresh.
+			if _, ok := c.Quirks.Cadence[name]; !ok {
+				errs = append(errs, p.errf("quirks.cadence",
+					"has no entry for channel %q used by %s", name, base))
 			}
 			in.Chans = append(in.Chans, ch)
 		}

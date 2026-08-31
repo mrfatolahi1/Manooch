@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	pb "github.com/you/manooch/gen/manoochv1"
 	"github.com/you/manooch/internal/config"
@@ -70,8 +69,12 @@ func TestLoadValid(t *testing.T) {
 	if got := cfg.Redis.DialTimeout.Std().String(); got != "2s" {
 		t.Errorf("dial_timeout = %q", got)
 	}
-	if got := cfg.TTL(time.Second); got.String() != "3s" {
-		t.Errorf("TTL(1s) = %v, want 3s", got)
+	// cadence 1s * ttl_multiplier 3.
+	if got := cfg.TTL(pb.Channel_CHANNEL_FUNDING); got.String() != "3s" {
+		t.Errorf("TTL(funding) = %v, want 3s", got)
+	}
+	if got := cfg.TTLs(); len(got) != 3 {
+		t.Errorf("TTLs() = %v, want one entry per configured channel", got)
 	}
 
 	// symbol_overrides wins; everything else strips the separator.

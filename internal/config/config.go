@@ -12,6 +12,7 @@ import (
 	"time"
 
 	pb "github.com/you/manooch/gen/manoochv1"
+	"github.com/you/manooch/internal/core"
 	"gopkg.in/yaml.v3"
 )
 
@@ -178,6 +179,11 @@ type ConnectionConfig struct {
 // QuirksConfig is the quirks section: per-venue behaviour the adapter must honour.
 type QuirksConfig struct {
 	TimestampUnit string `yaml:"timestamp_unit" validate:"required,oneof=ms us ns s"`
+	// Cadence is how often the venue updates each channel, keyed by channel
+	// name. It is per channel rather than per venue because KuCoin pushes
+	// funding once a minute and mark price once a second: one number would
+	// make the slower channel's key expire between updates.
+	Cadence map[string]Duration `yaml:"cadence" validate:"min=1"`
 }
 
 // InstrumentConfig is one block of instruments sharing a market type.
@@ -200,10 +206,31 @@ func (c *Config) VenueSymbol(canonical string) string {
 	return strings.ReplaceAll(canonical, "_", "")
 }
 
-// TTL turns a stream cadence into that stream's Redis key TTL. Key present
-// means fresh, key absent means stale; there is no third state.
-func (c *Config) TTL(cadence time.Duration) time.Duration {
-	return cadence * time.Duration(c.Health.TTLMultiplier)
+// Cadence is how often the venue updates a channel, or zero when the venue file
+// declares none. Load rejects a configured channel with no cadence, so zero
+// only reaches a caller asking about a channel nobody subscribed to.
+func (c *Config) Cadence(ch pb.Channel) time.Duration {
+	return c.Quirks.Cadence[core.ChannelName(ch)].Std()
+}
+
+// TTL is a channel's Redis key TTL: its cadence times health.ttl_multiplier.
+// Key present means fresh, key absent means stale; there is no third state.
+func (c *Config) TTL(ch pb.Channel) time.Duration {
+	return c.Cadence(ch) * time.Duration(c.Health.TTLMultiplier)
+}
+
+// TTLs is the TTL of every channel the venue declares a cadence for, which is
+// what an adapter needs to stamp its messages.
+func (c *Config) TTLs() map[pb.Channel]time.Duration {
+	out := make(map[pb.Channel]time.Duration, len(c.Quirks.Cadence))
+	for name := range c.Quirks.Cadence {
+		ch, err := core.ParseChannel(name)
+		if err != nil {
+			continue // Load already rejected it
+		}
+		out[ch] = c.TTL(ch)
+	}
+	return out
 }
 
 // A Stream is one instrument on one channel: exactly one Redis key.

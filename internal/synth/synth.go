@@ -23,15 +23,12 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// Cadences are invented for the generator; they say nothing about any real
-// venue.
-const (
-	markPriceCadence  = time.Second
-	indexPriceCadence = time.Second
-	fundingCadence    = time.Second
+const fundingIntervalSeconds = 8 * 60 * 60
 
-	fundingIntervalSeconds = 8 * 60 * 60
-)
+// fallbackCadence ticks a channel the venue file declares no cadence for. The
+// generator has to tick at something; the venue file is where a real rate is
+// written down.
+const fallbackCadence = time.Second
 
 // A Generator publishes synthetic data for every stream in the config.
 type Generator struct {
@@ -98,19 +95,13 @@ func (g *Generator) runStream(ctx context.Context, s config.Stream) {
 	}
 }
 
-// schedule returns how often a channel ticks and how long its key lives.
+// schedule returns how often a channel ticks and how long its key lives, from
+// the venue file, so synthetic streams expire on the same schedule as real ones.
 func (g *Generator) schedule(ch pb.Channel) (cadence, ttl time.Duration) {
-	switch ch {
-	case pb.Channel_CHANNEL_MARK_PRICE:
-		cadence = markPriceCadence
-	case pb.Channel_CHANNEL_INDEX_PRICE:
-		cadence = indexPriceCadence
-	case pb.Channel_CHANNEL_FUNDING:
-		cadence = fundingCadence
-	default:
-		cadence = time.Second
+	if cadence = g.cfg.Cadence(ch); cadence <= 0 {
+		cadence = fallbackCadence
 	}
-	return cadence, g.cfg.TTL(cadence)
+	return cadence, cadence * time.Duration(g.cfg.Health.TTLMultiplier)
 }
 
 func (g *Generator) build(s config.Stream, instrument *pb.Instrument, mkt *market, venueSeq uint64) proto.Message {

@@ -22,6 +22,12 @@ connection:
 
 quirks:
   timestamp_unit: ms               # ms|us|ns|s
+  # One markPrice frame carries all three, so all three share a cadence here.
+  # ttl = cadence * health.ttl_multiplier.
+  cadence:
+    mark_price:  1s
+    index_price: 1s
+    funding:     1s
 
 symbol_overrides:
   BTC_USDT: BTCUSDT
