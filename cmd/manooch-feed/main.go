@@ -1,8 +1,9 @@
 // Command manooch-feed is the venue daemon: it connects to one exchange,
 // normalizes what it sees, and publishes to Redis.
 //
-// There are no adapters yet. Without --synthetic the process starts, proves it
-// can reach Redis, serves /healthz and idles, and says so on startup.
+// It does not reconnect. A dropped socket logs at ERROR and stops the process:
+// loud and obvious, and the operator's restart policy stays in charge until
+// there is a supervisor that can say what it is doing instead.
 package main
 
 import (
@@ -24,7 +25,6 @@ import (
 	"github.com/you/manooch/internal/config"
 	"github.com/you/manooch/internal/obs"
 	"github.com/you/manooch/internal/publish"
-	"github.com/you/manooch/internal/synth"
 	"gopkg.in/yaml.v3"
 )
 
@@ -99,8 +99,20 @@ func run() error {
 		"synthetic", f.synthetic,
 		"streams", len(cfg.Streams()))
 
+	// Resolved before anything is opened, so an unknown venue or an unservable
+	// stream fails with no Redis connection and no bound port behind it.
+	prod, err := planProducers(f, cfg)
+	if err != nil {
+		return err
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// A second cancel, so a dead socket ends the run the same way a signal
+	// does rather than through a separate shutdown path that could disagree.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
 	pub, err := dialRedis(ctx, cfg, instanceID, metrics, logger)
 	if err != nil {
@@ -114,7 +126,7 @@ func run() error {
 		return err
 	}
 
-	producers := startProducers(ctx, f, cfg, pub, logger)
+	producers := prod.start(ctx, cfg, pub, metrics, logger, cancel)
 
 	<-ctx.Done()
 	logger.Info("shutting down")
@@ -168,26 +180,6 @@ func serveAdmin(cfg *config.Config, metrics *obs.Metrics, instanceID string, sta
 	}()
 	logger.Info("http listening", "addr", ln.Addr().String())
 	return srv, nil
-}
-
-// startProducers launches whatever feeds the publisher and returns a group that
-// closes when they have all stopped. At M0 the only producer is the synthetic
-// generator; a venue adapter takes its place in M1.
-func startProducers(ctx context.Context, f flags, cfg *config.Config, pub publish.Publisher, logger *slog.Logger) *sync.WaitGroup {
-	var wg sync.WaitGroup
-	if !f.synthetic {
-		logger.Info("no venue adapter in this build: serving /healthz and idling until M1")
-		return &wg
-	}
-
-	logger.Warn("synthetic mode: publishing generated data, not venue data")
-	gen := synth.New(cfg, pub, logger)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		gen.Run(ctx)
-	}()
-	return &wg
 }
 
 // shutdown stops everything under one deadline. Redis closes last, after the
