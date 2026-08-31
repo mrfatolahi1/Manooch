@@ -15,8 +15,8 @@ import (
 )
 
 // A Publisher writes one message to one topic. ttl == 0 means the key never
-// expires, for event-driven channels such as trades where silence is normal and
-// liveness comes from the socket instead.
+// expires, for channels with no cadence of their own, where an expiring key
+// would report a working stream as dead.
 type Publisher interface {
 	Publish(ctx context.Context, key string, msg proto.Message, ttl time.Duration) error
 	Close() error

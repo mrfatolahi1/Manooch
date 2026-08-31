@@ -15,10 +15,6 @@ import (
 // subscribes to channels it chose and knows the type already.
 func NewMessage(ch pb.Channel) (proto.Message, error) {
 	switch ch {
-	case pb.Channel_CHANNEL_ORDERBOOK:
-		return &pb.OrderBook{}, nil
-	case pb.Channel_CHANNEL_TRADES:
-		return &pb.Trades{}, nil
 	case pb.Channel_CHANNEL_MARK_PRICE:
 		return &pb.MarkPrice{}, nil
 	case pb.Channel_CHANNEL_INDEX_PRICE:

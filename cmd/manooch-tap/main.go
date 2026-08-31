@@ -157,25 +157,6 @@ func (t *tap) writeRaw(key string, seq uint64, payload []byte) {
 // summarize is the few numbers per message worth reading at speed.
 func summarize(msg any) string {
 	switch m := msg.(type) {
-	case *pb.OrderBook:
-		bid, ask := "-", "-"
-		if len(m.Bids) > 0 {
-			bid = price.Price(m.Bids[0].Price).String()
-		}
-		if len(m.Asks) > 0 {
-			ask = price.Price(m.Asks[0].Price).String()
-		}
-		return fmt.Sprintf("bid=%s ask=%s depth=%d", bid, ask, m.Depth)
-
-	case *pb.Trades:
-		if len(m.Trades) == 0 {
-			return "trades=0"
-		}
-		last := m.Trades[len(m.Trades)-1]
-		return fmt.Sprintf("trades=%d last=%s size=%s %s",
-			len(m.Trades), price.Price(last.Price), price.Size(last.Size),
-			strings.TrimPrefix(last.AggressorSide.String(), "SIDE_"))
-
 	case *pb.MarkPrice:
 		return "mark=" + price.Price(m.MarkPrice).String()
 

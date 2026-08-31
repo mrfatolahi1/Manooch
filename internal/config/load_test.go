@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	pb "github.com/you/manooch/gen/manoochv1"
 	"github.com/you/manooch/internal/config"
@@ -69,8 +70,8 @@ func TestLoadValid(t *testing.T) {
 	if got := cfg.Redis.DialTimeout.Std().String(); got != "2s" {
 		t.Errorf("dial_timeout = %q", got)
 	}
-	if got := cfg.TTL(cfg.BookCadence()); got.String() != "300ms" {
-		t.Errorf("TTL(book cadence) = %v, want 300ms", got)
+	if got := cfg.TTL(time.Second); got.String() != "3s" {
+		t.Errorf("TTL(1s) = %v, want 3s", got)
 	}
 
 	// symbol_overrides wins; everything else strips the separator.
@@ -81,27 +82,23 @@ func TestLoadValid(t *testing.T) {
 		t.Errorf("VenueSymbol(SOL_USDT) = %q", got)
 	}
 
-	if len(cfg.Instruments) != 2 {
-		t.Fatalf("instruments = %d, want 2", len(cfg.Instruments))
+	if len(cfg.Instruments) != 1 {
+		t.Fatalf("instruments = %d, want 1", len(cfg.Instruments))
 	}
-	spot, perp := cfg.Instruments[0], cfg.Instruments[1]
-	if spot.MT != pb.MarketType_MARKET_TYPE_SPOT {
-		t.Errorf("instruments[0].MT = %v", spot.MT)
-	}
+	perp := cfg.Instruments[0]
 	if perp.MT != pb.MarketType_MARKET_TYPE_PERP_LINEAR {
-		t.Errorf("instruments[1].MT = %v", perp.MT)
+		t.Errorf("instruments[0].MT = %v", perp.MT)
 	}
-	wantPerpChans := []pb.Channel{
-		pb.Channel_CHANNEL_ORDERBOOK, pb.Channel_CHANNEL_TRADES,
+	wantChans := []pb.Channel{
 		pb.Channel_CHANNEL_MARK_PRICE, pb.Channel_CHANNEL_INDEX_PRICE,
 		pb.Channel_CHANNEL_FUNDING,
 	}
-	if len(perp.Chans) != len(wantPerpChans) {
-		t.Fatalf("instruments[1].Chans = %v", perp.Chans)
+	if len(perp.Chans) != len(wantChans) {
+		t.Fatalf("instruments[0].Chans = %v", perp.Chans)
 	}
-	for i, ch := range wantPerpChans {
+	for i, ch := range wantChans {
 		if perp.Chans[i] != ch {
-			t.Errorf("instruments[1].Chans[%d] = %v, want %v", i, perp.Chans[i], ch)
+			t.Errorf("instruments[0].Chans[%d] = %v, want %v", i, perp.Chans[i], ch)
 		}
 	}
 }

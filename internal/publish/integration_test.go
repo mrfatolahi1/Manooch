@@ -125,32 +125,28 @@ func testKey(t *testing.T, ch pb.Channel) string {
 		}
 		return -1
 	}, sym)
-	return publish.Key("TESTVENUE", pb.MarketType_MARKET_TYPE_SPOT, sym+"_USDT", ch)
+	return publish.Key("TESTVENUE", pb.MarketType_MARKET_TYPE_PERP_LINEAR, sym+"_USDT", ch)
 }
 
-func book(t *testing.T, symbol string) *pb.OrderBook {
+func mark(t *testing.T, symbol string) *pb.MarkPrice {
 	t.Helper()
-	ref, err := core.ParseCanonical(symbol, pb.MarketType_MARKET_TYPE_SPOT)
+	ref, err := core.ParseCanonical(symbol, pb.MarketType_MARKET_TYPE_PERP_LINEAR)
 	if err != nil {
 		t.Fatal(err)
 	}
-	bid, _ := price.ParsePrice("68432.15")
-	ask, _ := price.ParsePrice("68432.25")
-	size, _ := price.ParseSize("0.5")
+	p, _ := price.ParsePrice("68432.15")
 	now := time.Now()
-	return &pb.OrderBook{
+	return &pb.MarkPrice{
 		Env: &pb.Envelope{
 			Venue:          "TESTVENUE",
 			Instrument:     ref.Proto("TESTUSDT"),
-			Channel:        pb.Channel_CHANNEL_ORDERBOOK,
+			Channel:        pb.Channel_CHANNEL_MARK_PRICE,
 			ExchangeTimeNs: now.Add(-10 * time.Millisecond).UnixNano(),
 			RecvTimeNs:     now.UnixNano(),
 			Source:         pb.Source_SOURCE_WEBSOCKET,
 			Status:         pb.Status_STATUS_HEALTHY,
 		},
-		Bids:  []*pb.PriceLevel{{Price: int64(bid), Size: int64(size)}},
-		Asks:  []*pb.PriceLevel{{Price: int64(ask), Size: int64(size)}},
-		Depth: 1,
+		MarkPrice: int64(p),
 	}
 }
 
@@ -162,7 +158,7 @@ func TestPublishWritesKeyAndChannel(t *testing.T) {
 	ctx := context.Background()
 	pub := newPublisher(t)
 	rdb := newClient(t)
-	key := testKey(t, pb.Channel_CHANNEL_ORDERBOOK)
+	key := testKey(t, pb.Channel_CHANNEL_MARK_PRICE)
 
 	sub := rdb.Subscribe(ctx, key)
 	defer sub.Close()
@@ -170,7 +166,7 @@ func TestPublishWritesKeyAndChannel(t *testing.T) {
 		t.Fatalf("subscribe: %v", err)
 	}
 
-	msg := book(t, "BTC_USDT")
+	msg := mark(t, "BTC_USDT")
 	if err := pub.Publish(ctx, key, msg, 5*time.Second); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
@@ -193,7 +189,7 @@ func TestPublishWritesKeyAndChannel(t *testing.T) {
 	// Delivered over Pub/Sub.
 	select {
 	case m := <-sub.Channel():
-		var got pb.OrderBook
+		var got pb.MarkPrice
 		if err := proto.Unmarshal([]byte(m.Payload), &got); err != nil {
 			t.Fatalf("unmarshal published: %v", err)
 		}
@@ -209,7 +205,7 @@ func TestPublishWritesKeyAndChannel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET %s: %v", key, err)
 	}
-	var cached pb.OrderBook
+	var cached pb.MarkPrice
 	if err := proto.Unmarshal(b, &cached); err != nil {
 		t.Fatalf("unmarshal cached: %v", err)
 	}
@@ -224,7 +220,7 @@ func TestKeyExpiresAndNotifies(t *testing.T) {
 	ctx := context.Background()
 	pub := newPublisher(t)
 	rdb := newClient(t)
-	key := testKey(t, pb.Channel_CHANNEL_ORDERBOOK)
+	key := testKey(t, pb.Channel_CHANNEL_MARK_PRICE)
 
 	events := rdb.PSubscribe(ctx, fmt.Sprintf("__keyevent@%d__:expired", testDB))
 	defer events.Close()
@@ -233,7 +229,7 @@ func TestKeyExpiresAndNotifies(t *testing.T) {
 	}
 
 	const ttl = 300 * time.Millisecond
-	if err := pub.Publish(ctx, key, book(t, "BTC_USDT"), ttl); err != nil {
+	if err := pub.Publish(ctx, key, mark(t, "BTC_USDT"), ttl); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
 
@@ -258,15 +254,15 @@ func TestKeyExpiresAndNotifies(t *testing.T) {
 	}
 }
 
-// TestZeroTTLPersists covers trades: event driven, so an empty stretch is
-// normal and an expiring key would call a working stream dead.
+// TestZeroTTLPersists covers a channel with no cadence of its own, where an
+// expiring key would call a working stream dead.
 func TestZeroTTLPersists(t *testing.T) {
 	ctx := context.Background()
 	pub := newPublisher(t)
 	rdb := newClient(t)
-	key := testKey(t, pb.Channel_CHANNEL_TRADES)
+	key := testKey(t, pb.Channel_CHANNEL_METADATA)
 
-	if err := pub.Publish(ctx, key, book(t, "BTC_USDT"), 0); err != nil {
+	if err := pub.Publish(ctx, key, mark(t, "BTC_USDT"), 0); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
 	t.Cleanup(func() { rdb.Del(context.Background(), key) })
@@ -288,7 +284,7 @@ func TestPublishSeqIsGapFree(t *testing.T) {
 	ctx := context.Background()
 	pub := newPublisher(t)
 	rdb := newClient(t)
-	key := testKey(t, pb.Channel_CHANNEL_ORDERBOOK)
+	key := testKey(t, pb.Channel_CHANNEL_MARK_PRICE)
 
 	const n = 10_000
 	sub := rdb.Subscribe(ctx, key)
@@ -298,7 +294,7 @@ func TestPublishSeqIsGapFree(t *testing.T) {
 	}
 	ch := sub.ChannelSize(n + 1000)
 
-	msg := book(t, "BTC_USDT")
+	msg := mark(t, "BTC_USDT")
 	for i := 1; i <= n; i++ {
 		if err := pub.Publish(ctx, key, msg, time.Minute); err != nil {
 			t.Fatalf("Publish %d: %v", i, err)
@@ -314,7 +310,7 @@ func TestPublishSeqIsGapFree(t *testing.T) {
 	for last < n {
 		select {
 		case m := <-ch:
-			var got pb.OrderBook
+			var got pb.MarkPrice
 			if err := proto.Unmarshal([]byte(m.Payload), &got); err != nil {
 				t.Fatalf("unmarshal: %v", err)
 			}
@@ -333,10 +329,10 @@ func TestPublishSeqIsGapFree(t *testing.T) {
 // from ten thousand missed messages.
 func TestInstanceIDDistinguishesRestartFromDrop(t *testing.T) {
 	ctx := context.Background()
-	key := testKey(t, pb.Channel_CHANNEL_ORDERBOOK)
+	key := testKey(t, pb.Channel_CHANNEL_MARK_PRICE)
 
 	first := newPublisher(t)
-	msg := book(t, "BTC_USDT")
+	msg := mark(t, "BTC_USDT")
 	for i := 1; i <= 3; i++ {
 		if err := first.Publish(ctx, key, msg, time.Minute); err != nil {
 			t.Fatalf("Publish: %v", err)
@@ -348,7 +344,7 @@ func TestInstanceIDDistinguishesRestartFromDrop(t *testing.T) {
 	}
 
 	second := newPublisher(t)
-	msg2 := book(t, "BTC_USDT")
+	msg2 := mark(t, "BTC_USDT")
 	if err := second.Publish(ctx, key, msg2, time.Minute); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
@@ -367,7 +363,7 @@ func TestNoEvictionSurfacesWriteErrors(t *testing.T) {
 	ctx := context.Background()
 	pub := newPublisher(t)
 	rdb := newClient(t)
-	key := testKey(t, pb.Channel_CHANNEL_ORDERBOOK)
+	key := testKey(t, pb.Channel_CHANNEL_MARK_PRICE)
 
 	t.Cleanup(func() {
 		bg := context.Background()
@@ -393,7 +389,7 @@ func TestNoEvictionSurfacesWriteErrors(t *testing.T) {
 		t.Fatalf("CONFIG SET maxmemory: %v", err)
 	}
 
-	err := pub.Publish(ctx, key, book(t, "BTC_USDT"), time.Minute)
+	err := pub.Publish(ctx, key, mark(t, "BTC_USDT"), time.Minute)
 	if err == nil {
 		t.Fatal("Publish succeeded against an exhausted noeviction instance")
 	}

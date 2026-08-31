@@ -1,1 +1,1 @@
-<config>/venues/binance.yaml: instruments[0].channels[2]: channel "funding" does not exist on market_type SPOT
+<config>/venues/binance.yaml: instruments[0].channels[0]: channel "funding" does not exist on market_type SPOT

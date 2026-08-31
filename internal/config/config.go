@@ -177,15 +177,12 @@ type ConnectionConfig struct {
 
 // QuirksConfig is the quirks section: per-venue behaviour the adapter must honour.
 type QuirksConfig struct {
-	TimestampUnit       string   `yaml:"timestamp_unit"        validate:"required,oneof=ms us ns s"`
-	BookDepthsSupported []uint32 `yaml:"book_depths_supported" validate:"required,min=1,dive,gt=0"`
-	BookCadenceMS       int      `yaml:"book_cadence_ms"       validate:"required,gt=0"`
+	TimestampUnit string `yaml:"timestamp_unit" validate:"required,oneof=ms us ns s"`
 }
 
 // InstrumentConfig is one block of instruments sharing a market type.
 type InstrumentConfig struct {
 	MarketType string   `yaml:"market_type" validate:"required"`
-	BookDepth  uint32   `yaml:"book_depth"  validate:"required,gt=0"`
 	Channels   []string `yaml:"channels"    validate:"required,min=1"`
 	Symbols    []string `yaml:"symbols"     validate:"required,min=1"`
 
@@ -203,11 +200,6 @@ func (c *Config) VenueSymbol(canonical string) string {
 	return strings.ReplaceAll(canonical, "_", "")
 }
 
-// BookCadence is how often the venue republishes a book snapshot.
-func (c *Config) BookCadence() time.Duration {
-	return time.Duration(c.Quirks.BookCadenceMS) * time.Millisecond
-}
-
 // TTL turns a stream cadence into that stream's Redis key TTL. Key present
 // means fresh, key absent means stale; there is no third state.
 func (c *Config) TTL(cadence time.Duration) time.Duration {
@@ -220,7 +212,6 @@ type Stream struct {
 	Symbol      string // canonical, "BTC_USDT"
 	VenueSymbol string // what this venue calls it, "BTCUSDT"
 	Channel     pb.Channel
-	BookDepth   uint32
 }
 
 // Streams expands the instrument blocks into individual streams. Both
@@ -235,7 +226,6 @@ func (c *Config) Streams() []Stream {
 					Symbol:      sym,
 					VenueSymbol: c.VenueSymbol(sym),
 					Channel:     ch,
-					BookDepth:   in.BookDepth,
 				})
 			}
 		}

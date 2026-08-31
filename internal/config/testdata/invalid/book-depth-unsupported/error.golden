@@ -1,1 +1,0 @@
-<config>/venues/binance.yaml: instruments[0].book_depth: is 25 but quirks.book_depths_supported is [5 10 20]

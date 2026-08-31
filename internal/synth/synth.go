@@ -1,6 +1,6 @@
 // Package synth generates market data so the publisher, manooch-tap and
-// manooch-status can be exercised before any exchange adapter exists. When the
-// first adapter lands, a bug can then be attributed to the adapter rather than
+// manooch-status can be exercised without an exchange connection. When an
+// adapter misbehaves, a bug can then be attributed to the adapter rather than
 // to the plumbing underneath it.
 //
 // The numbers are invented; the envelopes are not.
@@ -10,7 +10,6 @@ package synth
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"math/rand/v2"
 	"sync"
@@ -24,10 +23,9 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// Cadences for channels not on the book's schedule. Invented for the generator;
-// they say nothing about any real venue.
+// Cadences are invented for the generator; they say nothing about any real
+// venue.
 const (
-	tradesCadence     = 250 * time.Millisecond
 	markPriceCadence  = time.Second
 	indexPriceCadence = time.Second
 	fundingCadence    = time.Second
@@ -100,15 +98,9 @@ func (g *Generator) runStream(ctx context.Context, s config.Stream) {
 	}
 }
 
-// schedule returns how often a channel ticks and how long its key lives. Trades
-// get no TTL: they are event driven, so an empty minute is normal and an
-// expiring key would report a working stream as dead.
+// schedule returns how often a channel ticks and how long its key lives.
 func (g *Generator) schedule(ch pb.Channel) (cadence, ttl time.Duration) {
 	switch ch {
-	case pb.Channel_CHANNEL_ORDERBOOK:
-		cadence = g.cfg.BookCadence()
-	case pb.Channel_CHANNEL_TRADES:
-		return tradesCadence, 0
 	case pb.Channel_CHANNEL_MARK_PRICE:
 		cadence = markPriceCadence
 	case pb.Channel_CHANNEL_INDEX_PRICE:
@@ -126,10 +118,6 @@ func (g *Generator) build(s config.Stream, instrument *pb.Instrument, mkt *marke
 	mid, tick := mkt.step()
 
 	switch s.Channel {
-	case pb.Channel_CHANNEL_ORDERBOOK:
-		return buildBook(env, mid, tick, mkt, s.BookDepth)
-	case pb.Channel_CHANNEL_TRADES:
-		return buildTrades(env, mid, tick, mkt)
 	case pb.Channel_CHANNEL_MARK_PRICE:
 		return &pb.MarkPrice{Env: env, MarkPrice: int64(mid) + mkt.jitter(tick)}
 	case pb.Channel_CHANNEL_INDEX_PRICE:
@@ -162,49 +150,6 @@ func (g *Generator) envelope(instrument *pb.Instrument, ch pb.Channel, venueSeq 
 	}
 }
 
-func buildBook(env *pb.Envelope, mid price.Price, tick price.Price, mkt *market, depth uint32) *pb.OrderBook {
-	if depth == 0 {
-		depth = 1
-	}
-	book := &pb.OrderBook{
-		Env:   env,
-		Bids:  make([]*pb.PriceLevel, 0, depth),
-		Asks:  make([]*pb.PriceLevel, 0, depth),
-		Depth: depth,
-	}
-	// One tick per level, either side of the mid.
-	for i := range int64(depth) {
-		bid := int64(mid) - int64(tick)*(i+1)
-		ask := int64(mid) + int64(tick)*(i+1)
-		if bid <= 0 {
-			break
-		}
-		book.Bids = append(book.Bids, &pb.PriceLevel{Price: bid, Size: mkt.size()})
-		book.Asks = append(book.Asks, &pb.PriceLevel{Price: ask, Size: mkt.size()})
-	}
-	book.Depth = uint32(len(book.Bids))
-	return book
-}
-
-func buildTrades(env *pb.Envelope, mid price.Price, tick price.Price, mkt *market) *pb.Trades {
-	n := 1 + rand.IntN(3)
-	trades := &pb.Trades{Env: env, Trades: make([]*pb.Trade, 0, n)}
-	for i := range n {
-		side := pb.Side_SIDE_BUY
-		if rand.IntN(2) == 0 {
-			side = pb.Side_SIDE_SELL
-		}
-		trades.Trades = append(trades.Trades, &pb.Trade{
-			TradeId:        fmt.Sprintf("%d-%d", env.RecvTimeNs, i),
-			Price:          int64(mid) + mkt.jitter(tick),
-			Size:           mkt.size(),
-			AggressorSide:  side,
-			ExchangeTimeNs: env.ExchangeTimeNs,
-		})
-	}
-	return trades
-}
-
 func buildFunding(env *pb.Envelope, mkt *market) *pb.Funding {
 	// Roughly +/- 1bp at the 1e-12 rate scale.
 	rate := int64(rand.IntN(2*int(price.RateScale/10_000)+1)) - int64(price.RateScale/10_000)
@@ -217,13 +162,12 @@ func buildFunding(env *pb.Envelope, mkt *market) *pb.Funding {
 	}
 }
 
-// market is the shared price for one instrument, so the book, trades and mark
-// price of a symbol tell the same story.
+// market is the shared price for one instrument, so the mark and index price of
+// a symbol tell the same story.
 type market struct {
 	mu   sync.Mutex
 	mid  price.Price
 	tick price.Price
-	unit price.Size // typical trade size
 }
 
 func (g *Generator) market(mt pb.MarketType, symbol, base string) *market {
@@ -238,26 +182,24 @@ func (g *Generator) market(mt pb.MarketType, symbol, base string) *market {
 	return m
 }
 
-// seeds are mid price, tick size and trade size by base asset.
+// seeds are mid price and tick size by base asset.
 var seeds = map[string]struct {
 	mid  string
 	tick string
-	unit string
 }{
-	"BTC": {"68432.15", "0.1", "0.015"},
-	"ETH": {"3521.40", "0.01", "0.25"},
-	"SOL": {"152.37", "0.001", "5"},
+	"BTC": {"68432.15", "0.1"},
+	"ETH": {"3521.40", "0.01"},
+	"SOL": {"152.37", "0.001"},
 }
 
 func newMarket(base string) *market {
 	s, ok := seeds[base]
 	if !ok {
-		s = struct{ mid, tick, unit string }{"1.00", "0.0001", "100"}
+		s = struct{ mid, tick string }{"1.00", "0.0001"}
 	}
 	mid, _ := price.ParsePrice(s.mid)
 	tick, _ := price.ParsePrice(s.tick)
-	unit, _ := price.ParseSize(s.unit)
-	return &market{mid: mid, tick: tick, unit: unit}
+	return &market{mid: mid, tick: tick}
 }
 
 // step advances the random walk one increment and returns the new mid and tick.
@@ -274,12 +216,4 @@ func (m *market) step() (price.Price, price.Price) {
 // jitter is a few ticks either way, for prices near the mid but not on it.
 func (m *market) jitter(tick price.Price) int64 {
 	return int64(tick) * int64(rand.IntN(5)-2)
-}
-
-// size is a trade or level size around the instrument's typical unit.
-func (m *market) size() int64 {
-	m.mu.Lock()
-	unit := int64(m.unit)
-	m.mu.Unlock()
-	return unit/2 + rand.Int64N(unit*2+1)
 }

@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	pb "github.com/you/manooch/gen/manoochv1"
 	"github.com/you/manooch/internal/config"
 	"github.com/you/manooch/internal/obs"
 	"github.com/you/manooch/internal/publish"
@@ -235,12 +234,8 @@ func printResolved(w *os.File, cfg *config.Config, dir string) error {
 	streams := cfg.Streams()
 	fmt.Fprintf(w, "\n# %d streams\n", len(streams))
 	for _, s := range streams {
-		fmt.Fprintf(w, "# %-52s venue_symbol=%s",
+		fmt.Fprintf(w, "# %-52s venue_symbol=%s\n",
 			publish.Key(cfg.Venue, s.MarketType, s.Symbol, s.Channel), s.VenueSymbol)
-		if s.Channel == pb.Channel_CHANNEL_ORDERBOOK {
-			fmt.Fprintf(w, " depth=%d", s.BookDepth)
-		}
-		fmt.Fprintln(w)
 	}
 	return nil
 }

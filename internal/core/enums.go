@@ -102,8 +102,7 @@ func IsInverse(mt pb.MarketType) bool {
 // on a spot market would otherwise become a stream that is never populated.
 func ChannelValidFor(ch pb.Channel, mt pb.MarketType) bool {
 	switch ch {
-	case pb.Channel_CHANNEL_ORDERBOOK, pb.Channel_CHANNEL_TRADES,
-		pb.Channel_CHANNEL_METADATA, pb.Channel_CHANNEL_HEALTH:
+	case pb.Channel_CHANNEL_METADATA, pb.Channel_CHANNEL_HEALTH:
 		return true
 	case pb.Channel_CHANNEL_MARK_PRICE, pb.Channel_CHANNEL_INDEX_PRICE,
 		pb.Channel_CHANNEL_FUNDING:

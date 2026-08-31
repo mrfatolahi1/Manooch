@@ -285,11 +285,6 @@ func (c *Config) resolveInstruments(p *provenance) []error {
 		}
 		in.MT = mt
 
-		if !slices.Contains(c.Quirks.BookDepthsSupported, in.BookDepth) {
-			errs = append(errs, p.errf(base+".book_depth",
-				"is %d but quirks.book_depths_supported is %v", in.BookDepth, c.Quirks.BookDepthsSupported))
-		}
-
 		if _, ok := c.Endpoints.WS[in.MarketType]; !ok {
 			errs = append(errs, p.errf("endpoints.ws", "has no entry for market_type %q used by %s", in.MarketType, base))
 		}

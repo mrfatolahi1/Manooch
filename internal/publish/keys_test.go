@@ -16,8 +16,8 @@ func TestKey(t *testing.T) {
 		ch     pb.Channel
 		want   string
 	}{
-		{"BINANCE", pb.MarketType_MARKET_TYPE_SPOT, "BTC_USDT", pb.Channel_CHANNEL_ORDERBOOK,
-			"Manooch:BINANCE:SPOT:BTC_USDT:orderbook"},
+		{"BINANCE", pb.MarketType_MARKET_TYPE_SPOT, "BTC_USDT", pb.Channel_CHANNEL_METADATA,
+			"Manooch:BINANCE:SPOT:BTC_USDT:metadata"},
 		{"BINANCE", pb.MarketType_MARKET_TYPE_PERP_LINEAR, "BTC_USDT", pb.Channel_CHANNEL_MARK_PRICE,
 			"Manooch:BINANCE:PERP_LINEAR:BTC_USDT:mark_price"},
 		{"BINANCE", pb.MarketType_MARKET_TYPE_PERP_LINEAR, "BTC_USDT", pb.Channel_CHANNEL_HEALTH,
@@ -25,8 +25,8 @@ func TestKey(t *testing.T) {
 		{"BINANCE", pb.MarketType_MARKET_TYPE_PERP_INVERSE, "BTC_USD", pb.Channel_CHANNEL_FUNDING,
 			"Manooch:BINANCE:PERP_INVERSE:BTC_USD:funding"},
 		// Casing is enforced by the builder, not asked of the caller.
-		{"binance", pb.MarketType_MARKET_TYPE_SPOT, "btc_usdt", pb.Channel_CHANNEL_TRADES,
-			"Manooch:BINANCE:SPOT:BTC_USDT:trades"},
+		{"binance", pb.MarketType_MARKET_TYPE_PERP_LINEAR, "btc_usdt", pb.Channel_CHANNEL_INDEX_PRICE,
+			"Manooch:BINANCE:PERP_LINEAR:BTC_USDT:index_price"},
 	}
 	for _, tc := range cases {
 		if got := publish.Key(tc.venue, tc.mt, tc.symbol, tc.ch); got != tc.want {
@@ -55,11 +55,10 @@ func TestMatchPattern(t *testing.T) {
 
 func TestParseKeyRoundTrip(t *testing.T) {
 	keys := []string{
-		"Manooch:BINANCE:SPOT:BTC_USDT:orderbook",
 		"Manooch:BINANCE:PERP_LINEAR:BTC_USDT:mark_price",
 		"Manooch:BINANCE:PERP_LINEAR:ETH_USDT:index_price",
 		"Manooch:BINANCE:PERP_INVERSE:BTC_USD:funding",
-		"Manooch:BINANCE:FUTURE_LINEAR:BTC_USDT:trades",
+		"Manooch:BINANCE:FUTURE_LINEAR:BTC_USDT:mark_price",
 		"Manooch:OKX:MARGIN:SOL_USDT:health",
 		"Manooch:BINANCE:SPOT:BTC_USDT:metadata",
 		"Manooch:BINANCE:venue:health",
@@ -83,20 +82,20 @@ func TestParseKeyRejects(t *testing.T) {
 		key  string
 	}{
 		{"empty", ""},
-		{"wrong prefix case", "manooch:BINANCE:SPOT:BTC_USDT:orderbook"},
-		{"wrong prefix word", "Manuch:BINANCE:SPOT:BTC_USDT:orderbook"},
-		{"lower case venue", "Manooch:binance:SPOT:BTC_USDT:orderbook"},
-		{"lower case market type", "Manooch:BINANCE:spot:BTC_USDT:orderbook"},
-		{"unknown market type", "Manooch:BINANCE:SWAP:BTC_USDT:orderbook"},
-		{"unspecified market type", "Manooch:BINANCE:UNSPECIFIED:BTC_USDT:orderbook"},
-		{"lower case symbol", "Manooch:BINANCE:SPOT:btc_usdt:orderbook"},
-		{"symbol without separator", "Manooch:BINANCE:SPOT:BTCUSDT:orderbook"},
-		{"symbol with dash", "Manooch:BINANCE:SPOT:BTC-USDT:orderbook"},
-		{"upper case channel", "Manooch:BINANCE:SPOT:BTC_USDT:ORDERBOOK"},
+		{"wrong prefix case", "manooch:BINANCE:SPOT:BTC_USDT:mark_price"},
+		{"wrong prefix word", "Manuch:BINANCE:SPOT:BTC_USDT:mark_price"},
+		{"lower case venue", "Manooch:binance:SPOT:BTC_USDT:mark_price"},
+		{"lower case market type", "Manooch:BINANCE:spot:BTC_USDT:mark_price"},
+		{"unknown market type", "Manooch:BINANCE:SWAP:BTC_USDT:mark_price"},
+		{"unspecified market type", "Manooch:BINANCE:UNSPECIFIED:BTC_USDT:mark_price"},
+		{"lower case symbol", "Manooch:BINANCE:SPOT:btc_usdt:mark_price"},
+		{"symbol without separator", "Manooch:BINANCE:SPOT:BTCUSDT:mark_price"},
+		{"symbol with dash", "Manooch:BINANCE:SPOT:BTC-USDT:mark_price"},
+		{"upper case channel", "Manooch:BINANCE:SPOT:BTC_USDT:MARK_PRICE"},
 		{"unknown channel", "Manooch:BINANCE:SPOT:BTC_USDT:candles"},
 		{"unspecified channel", "Manooch:BINANCE:SPOT:BTC_USDT:unspecified"},
 		{"too few components", "Manooch:BINANCE:SPOT"},
-		{"too many components", "Manooch:BINANCE:SPOT:BTC_USDT:orderbook:extra"},
+		{"too many components", "Manooch:BINANCE:SPOT:BTC_USDT:mark_price:extra"},
 		{"stream key length under venue scope", "Manooch:BINANCE:venue:health:extra"},
 		{"venue subject upper case", "Manooch:BINANCE:venue:HEALTH"},
 		{"trailing separator", "Manooch:BINANCE:SPOT:BTC_USDT:"},

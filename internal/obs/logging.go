@@ -11,9 +11,9 @@ import (
 // NewLogger builds the process logger: JSON, at the configured level, tagged
 // with the venue this process serves.
 //
-// Nothing logs per message, at any level. A book stream at 10 updates a second
-// across 200 instruments is 2,000 lines a second, which buries the one line
-// that mattered. Log lifecycle events and status transitions, not data.
+// Nothing logs per message, at any level. Three channels at one update a second
+// across 200 instruments is 600 lines a second, which buries the one line that
+// mattered. Log lifecycle events and status transitions, not data.
 func NewLogger(w io.Writer, level, venue string) (*slog.Logger, error) {
 	lvl, err := ParseLevel(level)
 	if err != nil {
