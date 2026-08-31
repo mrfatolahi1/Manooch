@@ -7,7 +7,7 @@ EXCHANGE   ?= BINANCE
 COMPOSE    ?= docker compose -f deploy/docker-compose.yml
 LOCALCONF  := .local/config
 
-.PHONY: all proto build test test-integration test-smoke lint run validate up down clean
+.PHONY: all proto build test test-integration test-smoke lint run run-synthetic validate up down clean
 
 all: build
 
@@ -45,10 +45,14 @@ lint:
 validate:
 	$(GO) run ./cmd/manooch-feed --exchange=$(EXCHANGE) --config=$(CONFIG) --validate
 
-## run: feed against a Redis on localhost, publishing synthetic data. The
+## run: feed against a Redis on localhost, connected to the real venue. The
 ## committed config points at the compose service name, so this copies it and
 ## rewrites the address.
 run: $(LOCALCONF)
+	$(GO) run ./cmd/manooch-feed --exchange=$(EXCHANGE) --config=$(LOCALCONF)
+
+## run-synthetic: the same, publishing generated data instead of connecting out
+run-synthetic: $(LOCALCONF)
 	$(GO) run ./cmd/manooch-feed --exchange=$(EXCHANGE) --config=$(LOCALCONF) --synthetic
 
 $(LOCALCONF): $(wildcard config/*.yaml) $(wildcard config/venues/*.yaml)

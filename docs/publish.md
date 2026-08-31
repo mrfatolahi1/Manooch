@@ -1,4 +1,4 @@
-Covers: M0 · `internal/publish`
+Covers: M1 · `internal/publish`
 
 The Redis key scheme and the only write path onto it. Producers depend on the `Publisher` interface, not on a Redis client.
 

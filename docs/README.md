@@ -7,6 +7,9 @@ Start with [`architecture.md`](architecture.md): the shape, the dependency rule,
 | [`price.md`](price.md) | `pkg/price` — fixed-point types and the decimal parser |
 | [`config.md`](config.md) | `internal/config`, `config/` — loading, merging, validation |
 | [`core.md`](core.md) | `internal/core` — instrument identity, enum mapping |
+| [`adapter.md`](adapter.md) | `internal/core/adapter.go`, `internal/adapter/` — the inbound port |
+| [`adapter-binance.md`](adapter-binance.md) | `internal/adapter/binance` — endpoint, payload mapping, quirks |
+| [`transport.md`](transport.md) | `internal/transport` — websocket connections, where `recv_time_ns` is stamped |
 | [`publish.md`](publish.md) | `internal/publish` — key scheme and the write path |
 | [`obs.md`](obs.md) | `internal/obs` — logger and collectors |
 | [`synth.md`](synth.md) | `internal/synth` — dev-only generator, removed at M4 |
@@ -15,4 +18,4 @@ Start with [`architecture.md`](architecture.md): the shape, the dependency rule,
 
 Building and running: the repository [`README.md`](../README.md). Per-symbol detail: `go doc ./internal/<pkg>` — every exported symbol has a doc comment.
 
-`internal/adapter/`, `internal/transport/`, `internal/fallback/`, `internal/metadata/` and `testdata/` are empty at M0; `architecture.md` says what each is reserved for.
+`internal/fallback/` and `internal/metadata/` are empty; `architecture.md` says what each is reserved for.

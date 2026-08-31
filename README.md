@@ -10,19 +10,27 @@ downstream consumers. One process serves one venue.
 
 It mainly uses WebSockets to receive data, with REST API fallback and resubscription mechanism for unhealthy WebSockets. Manooch tries to ensure that fresh data is always available in Redis.
 
-**Milestone M0.** The skeleton and the contract exist. There are no exchange
-adapters yet: the only producer is a dev-only synthetic generator.
+**Milestone M1.** Real data from Binance USD-M futures: mark price, index price
+and funding, three Redis keys per symbol. The scope is now perpetual mark price
+only — order books and trades are gone for good. The feed does not yet
+reconnect: a dropped socket logs at ERROR and exits.
 
 No credentials, public endpoints only.
 
 ## Bring it up
 
 ```sh
-make up                 # docker compose: Redis + one feed, publishing synthetic data
+make up                 # docker compose: Redis + one feed
 make down
 ```
 
-Redis is published on `127.0.0.1:6379` for now.
+Redis is published on `127.0.0.1:6379` for now. To run the feed against the
+real venue from a checkout:
+
+```sh
+make run                 # against the real venue; needs a Redis on 127.0.0.1:6379
+make run-synthetic       # generated data, no outbound connection
+```
 
 ## Look at the data
 
@@ -31,8 +39,9 @@ manooch-tap --pattern="Manooch:BINANCE:*" [--redis=127.0.0.1:6379] [--json] [--r
 ```
 
 ```
-16:23:37.125  Manooch:BINANCE:PERP_LINEAR:BTC_USDT:orderbook     seq=1      HEALTHY  bid=68432.15 ask=68432.35 depth=20
-16:23:38.023  Manooch:BINANCE:PERP_LINEAR:BTC_USDT:funding       seq=1      HEALTHY  rate=-0.000059051878 next=2026-08-31T00:00:00Z interval=28800s
+16:23:37.125  Manooch:BINANCE:PERP_LINEAR:BTC_USDT:mark_price    seq=16     HEALTHY  mark=68432.15
+16:23:37.125  Manooch:BINANCE:PERP_LINEAR:BTC_USDT:index_price   seq=16     HEALTHY  index=68431.25
+16:23:37.126  Manooch:BINANCE:PERP_LINEAR:BTC_USDT:funding       seq=16     HEALTHY  rate=0.00038167 next=2026-09-01T00:00:00Z interval=0s
 ```
 
 ```sh
@@ -40,9 +49,10 @@ manooch-status [--venue=BINANCE] [--redis=127.0.0.1:6379]
 ```
 
 ```
-VENUE    MARKET TYPE  SYMBOL    CHANNEL      STATUS   AGE   SOURCE     TTL    PUBLISH SEQ
-BINANCE  PERP_LINEAR  BTC_USDT  orderbook    HEALTHY  19ms  WEBSOCKET  282ms  40
-BINANCE  PERP_LINEAR  BTC_USDT  trades       HEALTHY  19ms  WEBSOCKET  none   16
+VENUE    MARKET TYPE  SYMBOL    CHANNEL      STATUS   AGE    SOURCE     TTL   PUBLISH SEQ
+BINANCE  PERP_LINEAR  BTC_USDT  funding      HEALTHY  745ms  WEBSOCKET  2.3s  15
+BINANCE  PERP_LINEAR  BTC_USDT  index_price  HEALTHY  746ms  WEBSOCKET  2.3s  15
+BINANCE  PERP_LINEAR  BTC_USDT  mark_price   HEALTHY  746ms  WEBSOCKET  2.3s  15
 ```
 
 ## Documentation

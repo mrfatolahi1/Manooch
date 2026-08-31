@@ -21,8 +21,8 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
-    # --synthetic until the first adapter lands; without it the feed idles.
-    command: ["--exchange=BINANCE", "--config=/etc/manooch", "--synthetic"]
+    # Add --synthetic to publish generated data instead of connecting out.
+    command: ["--exchange=BINANCE", "--config=/etc/manooch"]
     volumes:
       - ../config:/etc/manooch:ro
     depends_on:
