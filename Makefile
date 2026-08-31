@@ -7,7 +7,7 @@ EXCHANGE   ?= BINANCE
 COMPOSE    ?= docker compose -f deploy/docker-compose.yml
 LOCALCONF  := .local/config
 
-.PHONY: all proto build test test-integration lint run validate up down clean
+.PHONY: all proto build test test-integration test-smoke lint run validate up down clean
 
 all: build
 
@@ -29,6 +29,11 @@ test:
 ## test-integration: tests that need Docker and a real Redis
 test-integration:
 	$(GO) test -tags=integration -count=1 -timeout=10m ./...
+
+## test-smoke: tests that reach the real venue. Not in CI: a red build must
+## mean our code broke, not that the exchange was slow.
+test-smoke:
+	$(GO) test -tags=smoke -count=1 -v -timeout=10m ./internal/adapter/...
 
 ## lint: vet plus a gofmt check
 lint:
