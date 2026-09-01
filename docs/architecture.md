@@ -2,7 +2,7 @@ Covers: M3 · whole repository
 
 A market-data price service: connect to one exchange over public websockets, normalize, publish to Redis. One process per venue, selected by `--exchange`. Two venues are served, Binance USD-M and KuCoin futures, and the service is complete.
 
-**Scope, permanently:** perpetual linear mark price, index price and funding. Order books and trades were dropped at M1.
+**Scope, permanently:** perpetual linear mark price, index price, funding and instrument metadata. Order books and trades were dropped at M1.
 
 ## Shape
 
