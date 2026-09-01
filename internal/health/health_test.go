@@ -312,3 +312,56 @@ func TestStaleOutranksDegraded(t *testing.T) {
 	tr.KeyExpired(spec)                                                      // stale
 	wantStatus(t, tr, spec, pb.Status_STATUS_STALE, "key expired")
 }
+
+// TestMetadataGatesEverything: without instrument metadata a price is a number
+// nobody can size an order against, so every stream is STALE and stays STALE
+// until the first fetch lands — whatever else is going right.
+func TestMetadataGatesEverything(t *testing.T) {
+	c, pub := newClock(), &recorder{}
+	tr, err := health.New(health.Options{
+		Venue:               "TESTVENUE",
+		Publisher:           pub,
+		Metrics:             obs.NewMetrics(),
+		Log:                 slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		HeartbeatInterval:   time.Second,
+		ClockSkewDegradedMS: 2000,
+		ClockSkewStaleMS:    10000,
+		FallbackMaxDuration: 5 * time.Minute,
+		MetadataRequired:    true,
+		Now:                 c.Now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := specs(t)[0]
+	for _, s := range specs(t) {
+		tr.Register(s, "BTCUSDT", socketID)
+	}
+	tr.SocketState(socketID, health.SocketConnected, "")
+
+	// Connected, receiving, and still STALE: the reason names what is missing.
+	tr.Received(spec)
+	wantStatus(t, tr, spec, pb.Status_STATUS_STALE, "metadata unavailable")
+
+	if status, reason := tr.VenueStatus(); status != pb.Status_STATUS_STALE || reason != "metadata unavailable" {
+		t.Errorf("venue status = %s (%q), want STALE", core.StatusName(status), reason)
+	}
+
+	tr.MetadataState(true, "")
+	wantStatus(t, tr, spec, pb.Status_STATUS_HEALTHY, "")
+
+	// It can go back: a refresher that starts failing again says so.
+	tr.MetadataState(false, "metadata unavailable")
+	wantStatus(t, tr, spec, pb.Status_STATUS_STALE, "metadata unavailable")
+}
+
+// TestMetadataNotRequiredIsHealthyFromTheStart: a venue file that does not make
+// metadata a startup dependency must not be held at STALE by one.
+func TestMetadataNotRequiredIsHealthyFromTheStart(t *testing.T) {
+	c, pub := newClock(), &recorder{}
+	tr := newTracker(t, c, pub)
+	spec := specs(t)[0]
+
+	tr.Received(spec)
+	wantStatus(t, tr, spec, pb.Status_STATUS_HEALTHY, "")
+}

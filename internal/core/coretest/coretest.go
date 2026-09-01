@@ -182,10 +182,12 @@ type Adapter struct {
 	// MaxStreamsPerSocket caps a plan. Zero means everything on one socket.
 	MaxStreamsPerSocket int
 
-	// DialFunc, ParseFunc and FetchFunc replace the defaults below.
-	DialFunc  func(context.Context, core.SocketPlan) (core.Conn, error)
-	ParseFunc func(frame []byte, recvNs int64) ([]core.Message, error)
-	FetchFunc func(context.Context, core.StreamSpec) ([]core.Message, error)
+	// DialFunc, ParseFunc, FetchFunc and MetadataFunc replace the defaults
+	// below.
+	DialFunc     func(context.Context, core.SocketPlan) (core.Conn, error)
+	ParseFunc    func(frame []byte, recvNs int64) ([]core.Message, error)
+	FetchFunc    func(context.Context, core.StreamSpec) ([]core.Message, error)
+	MetadataFunc func(context.Context, pb.MarketType) ([]*pb.InstrumentMeta, error)
 
 	dials atomic.Int64
 }
@@ -298,9 +300,35 @@ func (a *Adapter) FetchOnce(ctx context.Context, spec core.StreamSpec) ([]core.M
 	return []core.Message{a.Message(spec, time.Now().UnixNano(), pb.Source_SOURCE_REST)}, nil
 }
 
-// FetchMetadata is not part of this phase.
-func (a *Adapter) FetchMetadata(context.Context, pb.MarketType) ([]*pb.InstrumentMeta, error) {
+// FetchMetadata answers with whatever MetadataFunc returns. Without one it
+// answers ErrNotImplemented, which is what a venue that cannot do it says.
+func (a *Adapter) FetchMetadata(ctx context.Context, mt pb.MarketType) ([]*pb.InstrumentMeta, error) {
+	if a.MetadataFunc != nil {
+		return a.MetadataFunc(ctx, mt)
+	}
 	return nil, core.ErrNotImplemented
+}
+
+// Meta builds one instrument's metadata, with a valid envelope so the
+// publisher accepts it.
+func (a *Adapter) Meta(ref core.InstrumentRef, tick price.Price, lot price.Size, recvNs int64) *pb.InstrumentMeta {
+	venueSymbol, _ := a.VenueSymbol(ref)
+	return &pb.InstrumentMeta{
+		Env: &pb.Envelope{
+			Venue:      Venue,
+			Instrument: ref.Proto(venueSymbol),
+			Channel:    pb.Channel_CHANNEL_METADATA,
+			RecvTimeNs: recvNs,
+			Source:     pb.Source_SOURCE_REST,
+			Status:     pb.Status_STATUS_HEALTHY,
+		},
+		TickSize:           int64(tick),
+		LotSize:            int64(lot),
+		MinSize:            int64(lot),
+		ContractMultiplier: price.SizeScale,
+		Active:             true,
+		LastRefreshNs:      recvNs,
+	}
 }
 
 // RESTCost is one weight unit for everything.

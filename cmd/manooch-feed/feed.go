@@ -12,6 +12,7 @@ import (
 	"github.com/you/manooch/internal/core"
 	"github.com/you/manooch/internal/fallback"
 	"github.com/you/manooch/internal/health"
+	"github.com/you/manooch/internal/metadata"
 	"github.com/you/manooch/internal/obs"
 	"github.com/you/manooch/internal/publish"
 	"github.com/you/manooch/internal/ratelimit"
@@ -131,12 +132,30 @@ func (p *producers) start(ctx context.Context, cfg *config.Config, pub *publish.
 		ClockSkewDegradedMS: cfg.Health.ClockSkewDegradedMS,
 		ClockSkewStaleMS:    cfg.Health.ClockSkewStaleMS,
 		FallbackMaxDuration: cfg.Fallback.MaxDuration.Std(),
+		MetadataRequired:    cfg.Metadata.StartupRequired,
 	})
 	if err != nil {
 		return nil, err
 	}
 
 	specs, err := registerStreams(tracker, p.adapter, p.plans)
+	if err != nil {
+		return nil, err
+	}
+
+	refresher, err := metadata.New(metadata.Options{
+		Venue:        cfg.Venue,
+		Adapter:      p.adapter,
+		Publisher:    pub,
+		Health:       tracker,
+		Log:          log,
+		Instruments:  instrumentsOf(p.plans),
+		MarketType:   p.plans[0].Specs[0].Instrument.MarketType,
+		Interval:     cfg.Metadata.RefreshInterval.Std(),
+		FetchTimeout: cfg.Metadata.FetchTimeout.Std(),
+		Required:     cfg.Metadata.StartupRequired,
+		Backoff:      backoffPolicy(cfg.Supervisor.SocketReconnectBackoff),
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -210,13 +229,56 @@ func (p *producers) start(ctx context.Context, cfg *config.Config, pub *publish.
 			fn(ctx)
 		}()
 	}
+	// Health first and on its own: it is what publishes STALE while the
+	// metadata fetch is still failing, so it has to be running before anything
+	// waits on that fetch.
 	run(tracker.Run)
-	if watcher != nil {
-		run(watcher.Run)
-	}
-	run(proc.Run)
+	run(refresher.Run)
+
+	// Nothing streams until metadata has landed. A price published at unknown
+	// precision, with no contract multiplier, is a number a consumer would size
+	// an order from and get wrong.
+	run(func(ctx context.Context) {
+		if !refresher.WaitReady(ctx) {
+			log.Warn("shutting down before instrument metadata arrived; no market data was published")
+			return
+		}
+		var streams sync.WaitGroup
+		if watcher != nil {
+			streams.Add(1)
+			go func() {
+				defer streams.Done()
+				watcher.Run(ctx)
+			}()
+		}
+		streams.Add(1)
+		go func() {
+			defer streams.Done()
+			proc.Run(ctx)
+		}()
+		streams.Wait()
+	})
 
 	return &wg, nil
+}
+
+// instrumentsOf is the distinct instruments the plans cover, in plan order, so
+// the metadata refresher asks about exactly what this process streams.
+func instrumentsOf(plans []core.SocketPlan) []core.InstrumentRef {
+	var (
+		out  []core.InstrumentRef
+		seen = map[core.InstrumentRef]bool{}
+	)
+	for _, plan := range plans {
+		for _, spec := range plan.Specs {
+			if seen[spec.Instrument] {
+				continue
+			}
+			seen[spec.Instrument] = true
+			out = append(out, spec.Instrument)
+		}
+	}
+	return out
 }
 
 // registerStreams declares every stream to the health tracker before anything

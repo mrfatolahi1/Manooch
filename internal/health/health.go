@@ -62,6 +62,13 @@ type Options struct {
 	// stops being a degradation and becomes a failure.
 	FallbackMaxDuration time.Duration
 
+	// MetadataRequired holds every stream at STALE until MetadataState says
+	// the instrument metadata has arrived. Without tick size, lot size and the
+	// contract multiplier a consumer cannot size an order against the price we
+	// are publishing, so a feed that streams before metadata lands is a feed
+	// nobody can act on.
+	MetadataRequired bool
+
 	// Now is swappable for tests. Zero means time.Now.
 	Now func() time.Time
 }
@@ -82,6 +89,9 @@ type Tracker struct {
 	skewMS     int64
 	leaked     int
 	reconnects uint32
+
+	metadataOK     bool
+	metadataReason string
 
 	venueStatus pb.Status
 	venueReason string
@@ -146,11 +156,13 @@ func New(opts Options) (*Tracker, error) {
 		opts.Now = time.Now
 	}
 	return &Tracker{
-		opts:        opts,
-		now:         opts.Now,
-		streams:     map[core.StreamSpec]*stream{},
-		sockets:     map[string]*socket{},
-		venueStatus: pb.Status_STATUS_UNSPECIFIED,
+		opts:           opts,
+		now:            opts.Now,
+		streams:        map[core.StreamSpec]*stream{},
+		sockets:        map[string]*socket{},
+		metadataOK:     !opts.MetadataRequired,
+		metadataReason: "metadata unavailable",
+		venueStatus:    pb.Status_STATUS_UNSPECIFIED,
 	}, nil
 }
 
@@ -354,6 +366,25 @@ func (t *Tracker) FallbackDisengaged(spec core.StreamSpec) {
 	})
 }
 
+// MetadataState records whether the venue's instrument metadata has been
+// fetched. Until it has, every stream on the venue is STALE and nothing
+// streams: publishing a price with unknown precision is publishing a number
+// nobody can size an order from.
+//
+// reason is ignored when ok is true.
+func (t *Tracker) MetadataState(ok bool, reason string) {
+	t.update(func() []*instrument {
+		if t.metadataOK == ok && (ok || t.metadataReason == reason) {
+			return nil
+		}
+		t.metadataOK = ok
+		if !ok {
+			t.metadataReason = reason
+		}
+		return t.order
+	})
+}
+
 // SocketState records what one connection is doing. state is one of
 // SocketConnected, SocketDialing or SocketCircuitOpen.
 func (t *Tracker) SocketState(socketID, state, reason string) {
@@ -455,6 +486,11 @@ func (t *Tracker) compute(s *stream) (pb.Status, string) {
 	sock := t.sockets[s.socketID]
 
 	// --- STALE: do not trade this venue.
+	if !t.metadataOK {
+		// First, and above everything else: without metadata there is no
+		// price being published at all, so no other reason has happened yet.
+		return pb.Status_STATUS_STALE, t.metadataReason
+	}
 	if sock != nil && sock.state == SocketCircuitOpen {
 		return pb.Status_STATUS_STALE, "circuit open"
 	}
@@ -493,6 +529,9 @@ func (t *Tracker) compute(s *stream) (pb.Status, string) {
 
 // computeVenue derives the connection-level status. Callers hold the mutex.
 func (t *Tracker) computeVenue() (pb.Status, string) {
+	if !t.metadataOK {
+		return pb.Status_STATUS_STALE, t.metadataReason
+	}
 	ids := t.socketIDs()
 	for _, id := range ids {
 		if t.sockets[id].state == SocketCircuitOpen {
