@@ -17,6 +17,11 @@ import (
 func newMux(m *obs.Metrics, venue, instanceID string, started time.Time) *http.ServeMux {
 	mux := http.NewServeMux()
 
+	// Liveness, not readiness: it answers ok whenever the process is serving,
+	// including while the venue is unreachable and nothing is being published.
+	// The architecture does not restart a process because a venue is down, so a
+	// probe that went red would only invite churn. Whether a venue is actually
+	// publishing is what the health keys say.
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		body := struct {
 			Status        string  `json:"status"`

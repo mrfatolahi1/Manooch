@@ -26,6 +26,8 @@ The watcher and the supervisor each need the other — `OnExpired` → `Process.
 
 Routes: `GET /healthz` (JSON: status, venue, instance_id, uptime), `GET /metrics`, `/debug/pprof/*`. **No market-data route** — consumers read Redis, and a second path would be a second contract that disagrees with the first the moment either changes.
 
+**`/healthz` is liveness, not readiness.** It answers `ok` whenever the process is serving, including while the venue is unreachable and nothing is being published — a feed held at `STALE` waiting for metadata still passes the compose healthcheck. That is deliberate: the architecture does not restart a process because a venue is down, so a probe that went red would only invite churn. Whether a venue is actually publishing is the health keys' answer, and `manooch-status` is how to read it.
+
 ## manooch-tap
 
 `--pattern` (default `Manooch:*`), `--redis`, `--db`, `--json`, `--raw`, `--out`.
