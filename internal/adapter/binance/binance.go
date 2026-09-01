@@ -43,6 +43,17 @@ var Channels = []pb.Channel{
 // updates.
 const streamSuffix = "@markPrice@1s"
 
+// defaultHTTPTimeout bounds every outbound HTTP call this adapter makes: the
+// REST fetches and, because coder/websocket turns a client timeout into a
+// handshake deadline and then clones the client without it, the websocket
+// handshake too. The established connection is unaffected.
+//
+// Without it the calls are bounded by nothing but the OS. A venue that accepts
+// a connection and then says nothing parks the dial indefinitely: the streams
+// sit at DEGRADED "dialing", no attempt ever fails, so the circuit breaker
+// never trips and no reconnect is ever tried.
+const defaultHTTPTimeout = 30 * time.Second
+
 // eventMarkPriceUpdate is the only event type this adapter handles.
 const eventMarkPriceUpdate = "markPriceUpdate"
 
@@ -82,8 +93,13 @@ type Options struct {
 	// Dial opens a socket. Zero means transport.Dial; a test substitutes.
 	Dial transport.Dialer
 
-	// HTTPClient performs REST calls and the websocket handshake.
+	// HTTPClient performs REST calls and the websocket handshake. Zero means a
+	// client bounded by HTTPTimeout.
 	HTTPClient *http.Client
+
+	// HTTPTimeout bounds one outbound HTTP call. Zero means
+	// defaultHTTPTimeout. Ignored when HTTPClient is supplied.
+	HTTPTimeout time.Duration
 }
 
 // An Adapter is the Binance implementation of core.Adapter. It holds no stream
@@ -117,7 +133,11 @@ func New(opts Options) (*Adapter, error) {
 		opts.Limiter = ratelimit.Unlimited{}
 	}
 	if opts.HTTPClient == nil {
-		opts.HTTPClient = http.DefaultClient
+		timeout := opts.HTTPTimeout
+		if timeout <= 0 {
+			timeout = defaultHTTPTimeout
+		}
+		opts.HTTPClient = &http.Client{Timeout: timeout}
 	}
 
 	a := &Adapter{opts: opts, reverse: make(map[string]string, len(opts.SymbolOverrides))}

@@ -90,8 +90,15 @@ func (a *Adapter) subscribe(ctx context.Context, conn core.Conn, topics []string
 		case typeAck:
 			delete(pending, c.ID)
 		case typeError:
+			// The id may name none of our subscriptions, in which case the
+			// venue is refusing something else about the connection and the
+			// dial still has to fail.
+			topic, ok := pending[c.ID]
+			if !ok {
+				topic = "connection"
+			}
 			return core.NewParseError(core.KindVenue, pb.Channel_CHANNEL_UNSPECIFIED, "", nil,
-				"subscribe %s refused: code %d: %s", pending[c.ID], c.Code, c.Data)
+				"subscribe %s refused: code %d: %s", topic, c.Code, c.Data)
 		}
 		// Everything else — the welcome frame, a data message that arrived
 		// before its ack — is dropped. A mark price lost during a handshake is

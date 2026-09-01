@@ -131,8 +131,13 @@ func (a *Adapter) instrumentMeta(ref core.InstrumentRef, sym exchangeSymbol, exc
 			Channel:        pb.Channel_CHANNEL_METADATA,
 			ExchangeTimeNs: exchangeNs,
 			RecvTimeNs:     recvNs,
-			Source:         pb.Source_SOURCE_REST,
-			Status:         pb.Status_STATUS_HEALTHY,
+			// serverTime is the venue's clock at the moment it answered, so it
+			// is a send time like every other timestamp Binance gives us.
+			// Leaving this false would tell a consumer the opposite and drop
+			// the message out of the publish-latency histogram.
+			ExchangeTimeIsSendTime: true,
+			Source:                 pb.Source_SOURCE_REST,
+			Status:                 pb.Status_STATUS_HEALTHY,
 		},
 		ContractMultiplier: linearContractMultiplier,
 		Active:             sym.Status == statusTrading,

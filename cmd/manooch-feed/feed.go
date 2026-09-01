@@ -204,7 +204,9 @@ func (p *producers) start(ctx context.Context, cfg *config.Config, pub *publish.
 		return nil, err
 	}
 
-	log.Info("venue adapter ready", "sockets", len(p.plans), "streams", len(specs))
+	log.Info("venue adapter ready",
+		"sockets", len(p.plans), "streams", len(specs),
+		"rate_limits", p.limiter.KindNames())
 
 	run := func(fn func(context.Context)) {
 		wg.Add(1)

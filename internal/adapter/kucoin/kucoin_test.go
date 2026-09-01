@@ -620,3 +620,48 @@ func (denyingLimiter) Allow(context.Context, string, ratelimit.LimitKind, int) e
 	return ratelimit.ErrBudgetExhausted
 }
 func (denyingLimiter) Used(string, ratelimit.LimitKind) (int, int) { return 0, 0 }
+
+// TestStalledVenueDoesNotParkTheDial: a venue that accepts the connection and
+// then says nothing must fail, not hang.
+//
+// Nothing above the adapter bounds a dial — the supervisor passes its run
+// context, which has no deadline — so an unbounded HTTP client would leave the
+// socket runner blocked indefinitely. The streams would sit at DEGRADED
+// "dialing" while no attempt ever failed, so the circuit breaker would never
+// trip and no reconnect would ever be tried.
+func TestStalledVenueDoesNotParkTheDial(t *testing.T) {
+	stalled := make(chan struct{})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-stalled // accept the request and answer nothing
+	}))
+	t.Cleanup(srv.Close)
+	// Registered after the server's own cleanup so it runs before it: Close
+	// waits for outstanding requests, and this is what lets that one finish.
+	t.Cleanup(func() { close(stalled) })
+
+	a := newAdapterWith(t, kucoin.Options{
+		WSEndpoint:  srv.URL,
+		HTTPTimeout: 200 * time.Millisecond,
+		Dial: func(context.Context, transport.Options) (core.Conn, error) {
+			t.Error("a socket was dialed without a bullet")
+			return nil, nil
+		},
+	})
+	plans, err := a.PlanSubscriptions([]core.StreamSpec{spec(t, "BTC_USDT", pb.Channel_CHANNEL_MARK_PRICE)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() { _, err := a.Dial(context.Background(), plans[0]); done <- err }()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("Dial succeeded against a venue that answered nothing")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Dial parked on a stalled venue; the socket runner would never retry")
+	}
+}

@@ -22,7 +22,7 @@ makes to open the venue's own chart page.
 | `Venue` | `"KUCOIN"` |
 | `MarketType` | `PERP_LINEAR`, the only market served |
 | `Channels` | The three this adapter produces |
-| `Options` | Endpoints, overrides, per-socket limit, per-channel TTLs, limiter, dialer, `ConnectID`, `SubscribeTimeout` |
+| `Options` | Endpoints, overrides, per-socket limit, per-channel TTLs, limiter, dialer, `ConnectID`, `SubscribeTimeout`, `HTTPTimeout` |
 | `New(Options)` | Builds the adapter; opens nothing and fetches no token |
 | `Adapter` | Implements `core.Adapter` |
 
@@ -75,6 +75,7 @@ different cadences.
 | Unquoted JSON numbers | Decoded into `json.Number`, never `float64`, so the venue's own digit string reaches `price.ParsePrice`. A quoted number parses identically, so the venue may change its mind. |
 | No next funding time | `next_funding_time_ns` stays **zero**, on the stream and over REST. The venue publishes how long is left, not when; deriving an absolute time would publish our clock as though it were theirs. |
 | Funding timestamp is a settlement | `exchange_time_is_send_time` is false on funding. Differencing a four-hour-old event time against arrival would report a four-hour clock skew and take every stream STALE once a minute. |
+| A venue can accept and then say nothing | The default HTTP client is bounded by `HTTPTimeout` (30s), which bounds the bullet call and becomes the websocket handshake deadline. Unbounded, a stalled venue parks the dial forever: no attempt fails, so the breaker never trips. |
 | Inconsistent timestamp units | `timestampNs` rejects anything outside 2001–2286 in milliseconds. A venue that switches a topic to nanoseconds fails loudly instead of publishing a time in the year 56000. |
 | Funding REST names the index | `/funding-rate/{symbol}/current` answers with `.XBTUSDTMFPI8H`. The symbol comes from the spec, never the response. |
 | Nothing the venue omits is filled in | `min_notional` and metadata's `exchange_time_ns` stay zero: KuCoin publishes neither, and a computed one would look like a number they gave us. |

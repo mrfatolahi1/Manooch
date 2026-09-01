@@ -738,6 +738,12 @@ func TestFetchMetadata(t *testing.T) {
 	if want := 1562305380000 * int64(time.Millisecond); btc.Env.ExchangeTimeNs != want {
 		t.Errorf("exchange_time_ns = %d, want %d", btc.Env.ExchangeTimeNs, want)
 	}
+	// serverTime is the venue's clock when it answered, so it is a send time.
+	// Saying otherwise tells a consumer this timestamp may be hours old and
+	// drops the message out of the publish-latency histogram.
+	if !btc.Env.ExchangeTimeIsSendTime {
+		t.Error("exchange_time_is_send_time is false; serverTime is a send time")
+	}
 	if btc.Env.PublishTimeNs != 0 || btc.Env.PublishSeq != 0 {
 		t.Error("the adapter stamped publisher-owned fields")
 	}
@@ -793,5 +799,50 @@ func TestFetchMetadataSurfacesVenueErrors(t *testing.T) {
 	}
 	if !contains(err.Error(), "-1003") {
 		t.Errorf("error drops the venue's code: %v", err)
+	}
+}
+
+// TestStalledVenueDoesNotParkAFetch: the same bound on the REST path. A poll
+// that never returns holds one of the fallback's few concurrent slots, and the
+// context it is given is the run context, which has no deadline.
+func TestStalledVenueDoesNotParkAFetch(t *testing.T) {
+	stalled := make(chan struct{})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-stalled
+	}))
+	t.Cleanup(srv.Close)
+	// Registered after the server's own cleanup so it runs before it: Close
+	// waits for outstanding requests, and this is what lets that one finish.
+	t.Cleanup(func() { close(stalled) })
+
+	a, err := binance.New(binance.Options{
+		WSEndpoint:          "wss://fstream.binance.com/stream",
+		RESTEndpoint:        srv.URL,
+		MaxStreamsPerSocket: 100,
+		HTTPTimeout:         200 * time.Millisecond,
+		TTLs: map[pb.Channel]time.Duration{
+			pb.Channel_CHANNEL_MARK_PRICE:  3 * time.Second,
+			pb.Channel_CHANNEL_INDEX_PRICE: 3 * time.Second,
+			pb.Channel_CHANNEL_FUNDING:     3 * time.Second,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := a.FetchOnce(context.Background(), spec(t, "BTC_USDT", pb.Channel_CHANNEL_MARK_PRICE))
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("FetchOnce succeeded against a venue that answered nothing")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("FetchOnce parked on a stalled venue; it would hold a fallback slot forever")
 	}
 }

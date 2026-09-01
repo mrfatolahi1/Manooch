@@ -76,9 +76,10 @@ var _ core.Conn = (*Conn)(nil)
 
 // Dial opens a websocket and returns it ready to read.
 //
-// The handshake is bounded by ctx alone: the caller knows what a reasonable
-// connect time is for this venue, and a second timeout here would only be a
-// number nobody chose.
+// The handshake is bounded by ctx and by Options.HTTPClient.Timeout, which the
+// library turns into a handshake deadline before cloning the client without it,
+// so the established connection is unaffected. No timeout is invented here: the
+// adapter knows what a reasonable connect time is for its venue.
 func Dial(ctx context.Context, opts Options) (core.Conn, error) {
 	if opts.URL == "" {
 		return nil, errors.New("transport: no url")

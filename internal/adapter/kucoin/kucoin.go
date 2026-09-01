@@ -47,6 +47,17 @@ var Channels = []pb.Channel{
 // all, so a venue symbol missing it is rejected rather than guessed at.
 const linearSuffix = "M"
 
+// defaultHTTPTimeout bounds every outbound HTTP call this adapter makes: the
+// REST fetches and, because coder/websocket turns a client timeout into a
+// handshake deadline and then clones the client without it, the websocket
+// handshake too. The established connection is unaffected.
+//
+// Without it the calls are bounded by nothing but the OS. A venue that accepts
+// a connection and then says nothing parks the dial indefinitely: the streams
+// sit at DEGRADED "dialing", no attempt ever fails, so the circuit breaker
+// never trips and no reconnect is ever tried.
+const defaultHTTPTimeout = 30 * time.Second
+
 // quotes are the quote assets a linear perpetual may settle in, longest first
 // so "ETHUSDTM" resolves to USDT rather than USD.
 var quotes = []string{"USDT", "USDC", "USD"}
@@ -91,8 +102,12 @@ type Options struct {
 	Dial transport.Dialer
 
 	// HTTPClient performs the bullet call, the REST calls and the websocket
-	// handshake.
+	// handshake. Zero means a client bounded by HTTPTimeout.
 	HTTPClient *http.Client
+
+	// HTTPTimeout bounds one outbound HTTP call. Zero means
+	// defaultHTTPTimeout. Ignored when HTTPClient is supplied.
+	HTTPTimeout time.Duration
 
 	// ConnectID names this connection to the venue. Zero means a fresh UUID
 	// per dial, which is what a real run wants; a test pins it.
@@ -131,7 +146,11 @@ func New(opts Options) (*Adapter, error) {
 		opts.Limiter = ratelimit.Unlimited{}
 	}
 	if opts.HTTPClient == nil {
-		opts.HTTPClient = http.DefaultClient
+		timeout := opts.HTTPTimeout
+		if timeout <= 0 {
+			timeout = defaultHTTPTimeout
+		}
+		opts.HTTPClient = &http.Client{Timeout: timeout}
 	}
 	if opts.ConnectID == nil {
 		opts.ConnectID = newConnectID

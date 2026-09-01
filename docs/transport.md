@@ -23,6 +23,7 @@ does not, and says how long to wait before trying again.
 | `Dialer` | `func(ctx, Options) (core.Conn, error)`; adapters take one so a test can substitute |
 | `Conn.Read(ctx)` | Blocks for one frame, returns it with `recvNs` |
 | `Conn.Write(ctx, b)` | One text frame, for subscribe messages and client-initiated pings |
+| `Options.HTTPClient` | Performs the handshake; its `Timeout` becomes the handshake deadline, and the library clones it away so the live connection is unbounded |
 | `Conn.Close()` | Safe from another goroutine, and unblocks `Read` |
 | `Conn.ServerPings()` / `Conn.URL()` | Pings the venue sent; the address, for logs |
 | `ErrIdle` | Connected and silent past the read timeout |

@@ -239,17 +239,6 @@ func (w *Watcher) markExpired(spec core.StreamSpec) bool {
 	return true
 }
 
-// clearExpired forgets a stream's expiry, reporting whether it had one.
-func (w *Watcher) clearExpired(spec core.StreamSpec) bool {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if !w.expired[spec] {
-		return false
-	}
-	delete(w.expired, spec)
-	return true
-}
-
 // logError rate-limits a repeated failure to one line per interval.
 func (w *Watcher) logError(msg string, err error) {
 	now := w.now()

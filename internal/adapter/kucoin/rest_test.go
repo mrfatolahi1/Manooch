@@ -254,8 +254,9 @@ func TestFetchMetadata(t *testing.T) {
 	}
 	// This endpoint carries no server time, and stamping ours into a field
 	// named for the venue's would be a value we derived presented as theirs.
-	if btc.Env.ExchangeTimeNs != 0 {
-		t.Errorf("exchange_time_ns = %d; KuCoin's contract list carries no server time", btc.Env.ExchangeTimeNs)
+	if btc.Env.ExchangeTimeNs != 0 || btc.Env.ExchangeTimeIsSendTime {
+		t.Errorf("exchange_time_ns = %d send_time = %v; KuCoin's contract list carries no server time",
+			btc.Env.ExchangeTimeNs, btc.Env.ExchangeTimeIsSendTime)
 	}
 	// KuCoin publishes no minimum notional for futures. Zero says "not
 	// supplied"; a number computed here would look like one they gave us.
