@@ -109,6 +109,16 @@ func TestClosingStopsThePing(t *testing.T) {
 		t.Error("closing the wrapper did not close the socket under it")
 	}
 
+	// Wait for the goroutine rather than sleeping past it. A ping already being
+	// written when Close lands still completes, so counting immediately would
+	// race; what has to be true is that the ticker is gone, not that no write
+	// was in flight.
+	w, ok := c.(interface{ Wait() })
+	if !ok {
+		t.Fatal("the connection Dial returned does not own a ping goroutine")
+	}
+	w.Wait()
+
 	before, _ := pings(t, sock)
 	time.Sleep(150 * time.Millisecond)
 	after, _ := pings(t, sock)
