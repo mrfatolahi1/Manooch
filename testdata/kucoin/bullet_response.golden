@@ -1,0 +1,8 @@
+{
+  "error": {
+    "kind": "json",
+    "channel": "unspecified",
+    "message": "parse json: frame is not json: json: cannot unmarshal string into Go struct field frame.code of type int64"
+  },
+  "messages": []
+}

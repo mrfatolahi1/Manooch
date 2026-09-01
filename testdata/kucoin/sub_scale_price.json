@@ -1,0 +1,1 @@
+{"topic":"/contract/instrument:ETHUSDTM","type":"message","subject":"mark.index.price","data":{"markPrice":1234567.89012345678,"indexPrice":0.00000000001,"granularity":1000,"timestamp":1731899129000}}

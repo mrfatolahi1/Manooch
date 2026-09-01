@@ -1,0 +1,9 @@
+{
+  "error": {
+    "kind": "field",
+    "channel": "unspecified",
+    "symbol": "XBTXYZM",
+    "message": "parse field XBTXYZM: symbol: kucoin: \"XBTXYZM\" ends in no known quote asset"
+  },
+  "messages": []
+}

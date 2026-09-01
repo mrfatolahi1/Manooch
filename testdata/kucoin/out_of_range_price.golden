@@ -1,0 +1,9 @@
+{
+  "error": {
+    "kind": "range",
+    "channel": "mark_price",
+    "symbol": "XBTUSDTM",
+    "message": "parse range XBTUSDTM: field \"markPrice\" = \"99999999999\": price: value out of range for the scale"
+  },
+  "messages": []
+}

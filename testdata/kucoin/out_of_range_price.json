@@ -1,0 +1,1 @@
+{"topic":"/contract/instrument:XBTUSDTM","type":"message","subject":"mark.index.price","data":{"markPrice":99999999999,"indexPrice":90440.135,"granularity":1000,"timestamp":1731899129000}}

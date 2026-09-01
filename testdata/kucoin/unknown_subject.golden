@@ -1,0 +1,9 @@
+{
+  "error": {
+    "kind": "field",
+    "channel": "unspecified",
+    "symbol": "XBTUSDTM",
+    "message": "parse field XBTUSDTM: unhandled subject \"open.interest\""
+  },
+  "messages": []
+}

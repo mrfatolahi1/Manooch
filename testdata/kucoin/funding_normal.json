@@ -1,0 +1,1 @@
+{"topic":"/contract/instrument:XBTUSDTM","type":"message","subject":"funding.rate","data":{"granularity":60000,"fundingRate":-0.002966,"timestamp":1551770400000}}

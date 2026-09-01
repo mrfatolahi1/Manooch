@@ -1,0 +1,29 @@
+{
+  "error": null,
+  "messages": [
+    {
+      "key": "Manooch:KUCOIN:PERP_LINEAR:BTC_USDT:funding",
+      "channel": "funding",
+      "ttl": "3m0s",
+      "payload": {
+        "env": {
+          "channel": "CHANNEL_FUNDING",
+          "exchangeTimeNs": "1551770400000000000",
+          "instrument": {
+            "base": "BTC",
+            "canonical": "BTC_USDT",
+            "marketType": "MARKET_TYPE_PERP_LINEAR",
+            "quote": "USDT",
+            "settle": "USDT",
+            "venueSymbol": "XBTUSDTM"
+          },
+          "recvTimeNs": "1562305380123456789",
+          "source": "SOURCE_WEBSOCKET",
+          "status": "STATUS_HEALTHY",
+          "venue": "KUCOIN"
+        },
+        "fundingRate": "-2966000000"
+      }
+    }
+  ]
+}

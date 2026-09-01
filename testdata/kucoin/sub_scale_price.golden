@@ -1,0 +1,53 @@
+{
+  "error": null,
+  "messages": [
+    {
+      "key": "Manooch:KUCOIN:PERP_LINEAR:ETH_USDT:mark_price",
+      "channel": "mark_price",
+      "ttl": "3s",
+      "payload": {
+        "env": {
+          "channel": "CHANNEL_MARK_PRICE",
+          "exchangeTimeNs": "1731899129000000000",
+          "instrument": {
+            "base": "ETH",
+            "canonical": "ETH_USDT",
+            "marketType": "MARKET_TYPE_PERP_LINEAR",
+            "quote": "USDT",
+            "settle": "USDT",
+            "venueSymbol": "ETHUSDTM"
+          },
+          "recvTimeNs": "1562305380123456789",
+          "source": "SOURCE_WEBSOCKET",
+          "status": "STATUS_HEALTHY",
+          "venue": "KUCOIN"
+        },
+        "markPrice": "123456789012345678"
+      }
+    },
+    {
+      "key": "Manooch:KUCOIN:PERP_LINEAR:ETH_USDT:index_price",
+      "channel": "index_price",
+      "ttl": "3s",
+      "payload": {
+        "env": {
+          "channel": "CHANNEL_INDEX_PRICE",
+          "exchangeTimeNs": "1731899129000000000",
+          "instrument": {
+            "base": "ETH",
+            "canonical": "ETH_USDT",
+            "marketType": "MARKET_TYPE_PERP_LINEAR",
+            "quote": "USDT",
+            "settle": "USDT",
+            "venueSymbol": "ETHUSDTM"
+          },
+          "recvTimeNs": "1562305380123456789",
+          "source": "SOURCE_WEBSOCKET",
+          "status": "STATUS_HEALTHY",
+          "venue": "KUCOIN"
+        },
+        "indexPrice": "1"
+      }
+    }
+  ]
+}

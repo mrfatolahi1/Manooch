@@ -1,0 +1,8 @@
+{
+  "error": {
+    "kind": "venue",
+    "channel": "unspecified",
+    "message": "parse venue: venue error 404: topic /contract/instrument:XBTUSDTM is not supported"
+  },
+  "messages": []
+}

@@ -1,0 +1,9 @@
+{
+  "error": {
+    "kind": "field",
+    "channel": "mark_price",
+    "symbol": "XBTUSDTM",
+    "message": "parse field XBTUSDTM: timestamp 1731899129000000000: kucoin: timestamp is not milliseconds since the epoch"
+  },
+  "messages": []
+}
