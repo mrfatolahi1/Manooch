@@ -13,6 +13,7 @@ import (
 	"time"
 
 	pb "github.com/you/manooch/gen/manoochv1"
+	"github.com/you/manooch/internal/adapter/binance"
 	"github.com/you/manooch/internal/core"
 	"github.com/you/manooch/pkg/price"
 )
@@ -138,4 +139,36 @@ func TestLiveServerPingsAreAnswered(t *testing.T) {
 		}
 		frames++
 	}
+}
+
+// TestLiveFetchMetadata proves the startup dependency can actually be met.
+// Until it is, the venue reports STALE and publishes nothing, so a metadata
+// endpoint that has moved is an outage rather than a missing extra.
+func TestLiveFetchMetadata(t *testing.T) {
+	a := newAdapter(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), firstFrameDeadline)
+	defer cancel()
+
+	metas, err := a.FetchMetadata(ctx, binance.MarketType)
+	if err != nil {
+		t.Fatalf("FetchMetadata: %v", err)
+	}
+	if len(metas) < 10 {
+		t.Errorf("the venue listed %d perpetuals, which is fewer than it has", len(metas))
+	}
+
+	for _, m := range metas {
+		if m.Env.Instrument.Canonical != "BTC_USDT" {
+			continue
+		}
+		if m.TickSize <= 0 || m.LotSize <= 0 || m.ContractMultiplier <= 0 {
+			t.Errorf("BTC_USDT tick=%d lot=%d multiplier=%d", m.TickSize, m.LotSize, m.ContractMultiplier)
+		}
+		t.Logf("BTC_USDT tick %s lot %s min_notional %s active %v",
+			price.Price(m.TickSize), price.Size(m.LotSize),
+			price.Price(m.MinNotional), m.Active)
+		return
+	}
+	t.Error("the venue listed no BTC_USDT perpetual")
 }
