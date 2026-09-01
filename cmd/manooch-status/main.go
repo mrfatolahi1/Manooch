@@ -168,7 +168,8 @@ func readRows(ctx context.Context, rdb *redis.Client, keys []string) ([]row, err
 		r.venue = parts.Venue
 		r.venueScoped = parts.VenueScoped
 		if parts.VenueScoped {
-			r.marketType, r.channel = publish.VenueScope, parts.Subject
+			// Nothing about a connection belongs to one instrument.
+			r.marketType, r.channel, r.symbol = publish.VenueScope, parts.Subject, "-"
 		} else {
 			r.marketType = core.MarketTypeName(parts.MarketType)
 			r.symbol = parts.Symbol
@@ -213,7 +214,10 @@ func readRows(ctx context.Context, rdb *redis.Client, keys []string) ([]row, err
 		r.status = env.Status
 		r.statusText = core.StatusName(env.Status)
 		r.age = now.Sub(time.Unix(0, env.PublishTimeNs))
-		r.source = core.SourceName(env.Source)
+		r.source = "-" // health carries no source of its own
+		if env.Source != pb.Source_SOURCE_UNSPECIFIED {
+			r.source = core.SourceName(env.Source)
+		}
 		r.publishSeq = env.PublishSeq
 		r.reason = env.StatusReason
 		if h, ok := msg.(*pb.Health); ok {
@@ -294,13 +298,9 @@ func print(rows []row, colour bool) {
 	}
 	w.Flush()
 
-	streams := 0
-	for _, r := range rows {
-		if !r.venueScoped {
-			streams++
-		}
-	}
-	summary := fmt.Sprintf("%d streams", streams)
+	// Keys, not streams: the health keys are rows too, and calling them
+	// streams would make the count disagree with the statuses beside it.
+	summary := fmt.Sprintf("%d keys", len(rows))
 	for _, s := range []string{"HEALTHY", "DEGRADED", "STALE", "UNSPECIFIED"} {
 		if n := counts[s]; n > 0 {
 			summary += fmt.Sprintf(", %d %s", n, strings.ToLower(s))
