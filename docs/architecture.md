@@ -44,7 +44,6 @@ graph TD
   feed["cmd/manooch-feed"] --> adapter["internal/adapter"]
   feed --> supervisor["internal/supervisor"]
   feed --> fallback["internal/fallback"]
-  feed --> synth["internal/synth"]
   feed --> obs["internal/obs"]
   cli["cmd/manooch-tap<br/>cmd/manooch-status"] --> publish["internal/publish"]
   adapter --> binance["internal/adapter/binance"]
@@ -58,8 +57,6 @@ graph TD
   fallback --> publish
   health --> publish
   transport --> core["internal/core"]
-  synth --> config
-  synth --> publish
   config --> core
   config --> price
   publish --> core
@@ -93,9 +90,9 @@ sequenceDiagram
   P->>R: PUBLISH key bytes
 ```
 
-The REST fallback enters at the same `Publish` with `SOURCE_REST`; `synth`
-enters there too, building its own envelope. Everything from `Publish` rightward
-is identical in all three.
+The REST fallback enters at the same `Publish` with `SOURCE_REST`, and the
+metadata refresher enters there with its own envelope. Everything from `Publish`
+rightward is identical for all three.
 
 ## Redis layout
 
@@ -140,7 +137,7 @@ The `SET` makes freshness a property of the data — key present means fresh, ke
 
 | Path | State |
 |---|---|
-| `pkg/price`, `internal/{core,config,publish,obs,synth}`, `cmd/*` | built |
+| `pkg/price`, `internal/{core,config,publish,obs}`, `cmd/*` | built |
 | `internal/adapter/` | built — `binance`, plus the shared conformance suite |
 | `internal/transport/` | built — one websocket connection, backoff, circuit breaker |
 | `internal/supervisor/` | built — the restart procedure and both escalation tiers |

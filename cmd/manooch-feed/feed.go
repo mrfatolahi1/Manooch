@@ -17,28 +17,23 @@ import (
 	"github.com/you/manooch/internal/publish"
 	"github.com/you/manooch/internal/ratelimit"
 	"github.com/you/manooch/internal/supervisor"
-	"github.com/you/manooch/internal/synth"
 	"github.com/you/manooch/internal/transport"
 )
 
-// producers is what will feed the publisher once Redis is up: either the
-// synthetic generator or a venue adapter's sockets.
+// producers is what will feed the publisher once Redis is up: one venue
+// adapter's sockets, the metadata refresher, and the health and fallback
+// machinery around them.
 type producers struct {
-	synthetic bool
-	adapter   core.Adapter
-	plans     []core.SocketPlan
-	limiter   *ratelimit.LocalLimiter
+	adapter core.Adapter
+	plans   []core.SocketPlan
+	limiter *ratelimit.LocalLimiter
 }
 
 // planProducers resolves everything the config can get wrong. It opens
 // nothing — no socket, no REST call — so an unknown venue or a stream this
 // venue cannot serve fails at startup rather than becoming a key nobody ever
 // writes, which reads exactly like a venue that went quiet.
-func planProducers(f flags, cfg *config.Config, log *slog.Logger) (*producers, error) {
-	if f.synthetic {
-		return &producers{synthetic: true}, nil
-	}
-
+func planProducers(cfg *config.Config, log *slog.Logger) (*producers, error) {
 	limiter, err := newLimiter(cfg, log)
 	if err != nil {
 		return nil, err
@@ -107,17 +102,6 @@ func newLimiter(cfg *config.Config, log *slog.Logger) (*ratelimit.LocalLimiter, 
 // back is counted and reported rather than escalated into a restart.
 func (p *producers) start(ctx context.Context, cfg *config.Config, pub *publish.RedisPublisher, metrics *obs.Metrics, log *slog.Logger) (*sync.WaitGroup, error) {
 	var wg sync.WaitGroup
-
-	if p.synthetic {
-		log.Warn("synthetic mode: publishing generated data, not venue data")
-		gen := synth.New(cfg, pub, log)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			gen.Run(ctx)
-		}()
-		return &wg, nil
-	}
 
 	// The limiter was built before Redis was dialled, because the adapter needed
 	// it. Now there is somewhere to write the advisory key.

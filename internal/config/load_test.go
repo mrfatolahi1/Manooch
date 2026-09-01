@@ -77,12 +77,11 @@ func TestLoadValid(t *testing.T) {
 		t.Errorf("TTLs() = %v, want one entry per configured channel", got)
 	}
 
-	// symbol_overrides wins; everything else strips the separator.
-	if got := cfg.VenueSymbol("BTC_USDT"); got != "BTCUSDT" {
-		t.Errorf("VenueSymbol(BTC_USDT) = %q", got)
-	}
-	if got := cfg.VenueSymbol("SOL_USDT"); got != "SOLUSDT" {
-		t.Errorf("VenueSymbol(SOL_USDT) = %q", got)
+	// symbol_overrides is carried through untouched. What a venue calls an
+	// instrument is the adapter's answer, not this package's: the rule differs
+	// per venue and a fallback here would be right for at most one of them.
+	if got := cfg.SymbolOverrides["BTC_USDT"]; got != "BTCUSDT" {
+		t.Errorf("symbol_overrides[BTC_USDT] = %q", got)
 	}
 
 	if len(cfg.Instruments) != 1 {

@@ -32,7 +32,6 @@ real venue from a checkout:
 
 ```sh
 make run                 # against the real venue; needs a Redis on 127.0.0.1:6379
-make run-synthetic       # generated data, no outbound connection
 ```
 
 ## Look at the data

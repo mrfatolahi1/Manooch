@@ -39,6 +39,5 @@ No framework, no ORM, no CLI or config library: `net/http.ServeMux` and `flag` c
 - `make run` copies `config/` to `.local/config` with `redis.addr` rewritten to `127.0.0.1`, because the committed default names the compose service.
 - `make lint` is `go vet` plus a `gofmt -l` check. `make proto` needs `protoc` and `protoc-gen-go` on `PATH`.
 - `make test` is unit tests only. `make test-integration` needs Docker; `make test-smoke` reaches the real venue and is **not** in CI, so a red build means our code broke rather than that the exchange was slow.
-- `make run` connects to the venue; `make run-synthetic` publishes generated data instead.
 - Keep `CGO_ENABLED=0`: the runtime image is musl and the build image's libc need not match.
 - Alpine, not distroless — the compose healthcheck uses `wget`.

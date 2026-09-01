@@ -12,11 +12,11 @@ Three binaries. Flags come from the standard library `flag` package; there is no
 
 ## manooch-feed
 
-`--exchange` (required, must already be upper case), `--config` (`./config`), `--validate`, `--synthetic`.
+`--exchange` (required, must already be upper case), `--config` (`./config`), `--validate`.
 
 `run` orchestrates: `parseFlags` → `config.Load` → if `--validate`, print and return → logger and metrics → `uuid.NewString()` for `instance_id` → `planProducers` → `dialRedis` → `serveAdmin` → `producers.start` → block on `os.Interrupt`/`SIGTERM` → `shutdown`, which stops HTTP, waits for the producers and closes Redis under a 10s deadline.
 
-`planProducers` runs **before** Redis is dialled or a port is bound, and opens nothing: an unknown venue or a stream the adapter cannot serve fails with nothing to clean up. Without `--synthetic` it builds the venue adapter and its socket plans; with it, the generator.
+`planProducers` runs **before** Redis is dialled or a port is bound, and opens nothing: an unknown venue or a stream the adapter cannot serve fails with nothing to clean up. It builds the rate limiter, the venue adapter and its socket plans.
 
 `producers.start` builds three long-lived goroutines and returns a `WaitGroup` over them: `health.Tracker.Run` (the heartbeat), `fallback.Watcher.Run` (expiry subscription and sweep) and `supervisor.Process.Run` (the sockets). **Nothing here ends the process.** A dead socket redials with jittered backoff behind a circuit breaker, a failed stream relaunches on its own, an expired key is served over REST, and a goroutine that will not come back is counted rather than escalated. Only a signal stops the run.
 

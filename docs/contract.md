@@ -33,7 +33,7 @@ Both forms matter. The numeric reservation stops a future channel decoding as th
 
 | Filled by | Fields |
 |---|---|
-| Producer (a venue adapter, or `internal/synth`) | `venue`, `instrument`, `channel`, `exchange_time_ns`, `recv_time_ns`, `venue_seq`, `venue_seq_present`, `source`, `status`, `status_reason` |
+| Producer (a venue adapter) | `venue`, `instrument`, `channel`, `exchange_time_ns`, `recv_time_ns`, `venue_seq`, `venue_seq_present`, `source`, `status`, `status_reason` |
 | `publish.RedisPublisher.Publish` | `publish_seq`, `instance_id`, `schema_version`, `publish_time_ns`, and `venue` if left empty |
 | Nothing yet | `price_exp`, `size_exp` — left `0`, which the schema defines as the global scale (`-11`, `-8`) |
 

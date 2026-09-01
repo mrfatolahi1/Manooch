@@ -15,7 +15,6 @@ Start with [`architecture.md`](architecture.md): the shape, the dependency rule,
 | [`fallback.md`](fallback.md) | `internal/fallback` — expiry trigger, REST polling, escalation to `STALE` |
 | [`publish.md`](publish.md) | `internal/publish` — key scheme and the write path |
 | [`obs.md`](obs.md) | `internal/obs` — logger and collectors |
-| [`synth.md`](synth.md) | `internal/synth` — dev-only generator, removed at M4 |
 | [`cli.md`](cli.md) | `cmd/*` — the three binaries |
 | [`deploy.md`](deploy.md) | `deploy/`, `Makefile`, `go.mod` |
 

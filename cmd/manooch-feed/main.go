@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/you/manooch/internal/adapter"
 	"github.com/you/manooch/internal/config"
 	"github.com/you/manooch/internal/obs"
 	"github.com/you/manooch/internal/publish"
@@ -45,7 +46,6 @@ type flags struct {
 	exchange  string
 	configDir string
 	validate  bool
-	synthetic bool
 }
 
 func parseFlags() (flags, error) {
@@ -53,7 +53,6 @@ func parseFlags() (flags, error) {
 	flag.StringVar(&f.exchange, "exchange", "", "venue to run, upper case (required)")
 	flag.StringVar(&f.configDir, "config", "./config", "directory holding defaults.yaml and venues/")
 	flag.BoolVar(&f.validate, "validate", false, "load and validate config, print the resolved config, exit")
-	flag.BoolVar(&f.synthetic, "synthetic", false, "dev only: publish generated data instead of connecting to a venue")
 	flag.Parse()
 
 	if f.exchange == "" {
@@ -97,12 +96,11 @@ func run() error {
 		"instance_id", instanceID,
 		"config_dir", f.configDir,
 		"enabled", cfg.Enabled,
-		"synthetic", f.synthetic,
 		"streams", len(cfg.Streams()))
 
 	// Resolved before anything is opened, so an unknown venue or an unservable
 	// stream fails with no Redis connection and no bound port behind it.
-	prod, err := planProducers(f, cfg, logger)
+	prod, err := planProducers(cfg, logger)
 	if err != nil {
 		return err
 	}
@@ -215,6 +213,12 @@ func shutdown(srv *http.Server, pub *publish.RedisPublisher, producers *sync.Wai
 // printResolved writes the merged config and the exact set of Redis keys it
 // implies. The key list is where a wrong symbol or a channel on the wrong
 // market type becomes obvious before anything runs.
+//
+// The venue symbols come from the adapter rather than from a rule in the config
+// package. Only the adapter knows them — BTC_USDT is BTCUSDT on Binance and
+// XBTUSDTM on KuCoin — and a printout that guessed would be an operator
+// checking their config against a symbol nothing will ever subscribe to.
+// Building the adapter opens nothing, so this stays safe to run anywhere.
 func printResolved(w *os.File, cfg *config.Config, dir string) error {
 	out, err := yaml.Marshal(cfg)
 	if err != nil {
@@ -224,11 +228,24 @@ func printResolved(w *os.File, cfg *config.Config, dir string) error {
 		return err
 	}
 
-	streams := cfg.Streams()
-	fmt.Fprintf(w, "\n# %d streams\n", len(streams))
-	for _, s := range streams {
+	a, err := adapter.New(cfg, adapter.Deps{})
+	if err != nil {
+		return err
+	}
+	specs, err := adapter.Specs(cfg)
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(w, "\n# %d streams\n", len(specs))
+	for _, spec := range specs {
+		venueSymbol, err := a.VenueSymbol(spec.Instrument)
+		if err != nil {
+			return err
+		}
 		fmt.Fprintf(w, "# %-52s venue_symbol=%s\n",
-			publish.Key(cfg.Venue, s.MarketType, s.Symbol, s.Channel), s.VenueSymbol)
+			publish.Key(cfg.Venue, spec.Instrument.MarketType, spec.Instrument.Canonical(), spec.Channel),
+			venueSymbol)
 	}
 	return nil
 }

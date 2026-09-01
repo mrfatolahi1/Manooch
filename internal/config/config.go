@@ -8,7 +8,6 @@ package config
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	pb "github.com/you/manooch/gen/manoochv1"
@@ -144,7 +143,7 @@ type CircuitBreakerConfig struct {
 	OpenDuration        Duration `yaml:"open_duration"        validate:"required,gt=0"`
 }
 
-// MetadataConfig is the metadata section. Parsed and validated; unread until M3.
+// MetadataConfig is the metadata section, read by internal/metadata.
 type MetadataConfig struct {
 	RefreshInterval Duration `yaml:"refresh_interval" validate:"required,gt=0"`
 	StartupRequired bool     `yaml:"startup_required"`
@@ -157,8 +156,8 @@ type EndpointsConfig struct {
 	REST map[string]string `yaml:"rest" validate:"required,min=1"`
 }
 
-// RateLimitConfig is the rate_limit section. Parsed and validated; the rate
-// limiter that reads it is M3.
+// RateLimitConfig is the rate_limit section, translated into the buckets
+// internal/ratelimit enforces.
 type RateLimitConfig struct {
 	RESTWeightPerMinute int `yaml:"rest_weight_per_minute" validate:"required,gt=0"`
 	// MaxWeightFraction is the share of the venue's published budget to use.
@@ -203,15 +202,6 @@ type InstrumentConfig struct {
 	Chans []pb.Channel  `yaml:"-"`
 }
 
-// VenueSymbol maps a canonical symbol to what this venue calls it, falling back
-// to the concatenation most venues use.
-func (c *Config) VenueSymbol(canonical string) string {
-	if s, ok := c.SymbolOverrides[canonical]; ok {
-		return s
-	}
-	return strings.ReplaceAll(canonical, "_", "")
-}
-
 // Cadence is how often the venue updates a channel, or zero when the venue file
 // declares none. Load rejects a configured channel with no cadence, so zero
 // only reaches a caller asking about a channel nobody subscribed to.
@@ -240,26 +230,24 @@ func (c *Config) TTLs() map[pb.Channel]time.Duration {
 }
 
 // A Stream is one instrument on one channel: exactly one Redis key.
+//
+// There is no venue symbol here on purpose. Only the adapter knows what a venue
+// calls an instrument, and a rule in this package would have to be right for
+// every venue at once — which stopped being possible the moment a second one
+// spelled bitcoin XBT.
 type Stream struct {
-	MarketType  pb.MarketType
-	Symbol      string // canonical, "BTC_USDT"
-	VenueSymbol string // what this venue calls it, "BTCUSDT"
-	Channel     pb.Channel
+	MarketType pb.MarketType
+	Symbol     string // canonical, "BTC_USDT"
+	Channel    pb.Channel
 }
 
-// Streams expands the instrument blocks into individual streams. Both
-// --validate and the synthetic generator walk it.
+// Streams expands the instrument blocks into individual streams.
 func (c *Config) Streams() []Stream {
 	var out []Stream
 	for _, in := range c.Instruments {
 		for _, sym := range in.Symbols {
 			for _, ch := range in.Chans {
-				out = append(out, Stream{
-					MarketType:  in.MT,
-					Symbol:      sym,
-					VenueSymbol: c.VenueSymbol(sym),
-					Channel:     ch,
-				})
+				out = append(out, Stream{MarketType: in.MT, Symbol: sym, Channel: ch})
 			}
 		}
 	}
