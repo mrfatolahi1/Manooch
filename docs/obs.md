@@ -1,4 +1,4 @@
-Covers: M2 · `internal/obs`
+Covers: M3 · `internal/obs`
 
 The process logger and the full Prometheus collector set, on a private registry.
 
@@ -9,7 +9,7 @@ The process logger and the full Prometheus collector set, on a private registry.
 
 No test file. `NewLogger` returns a JSON `slog.Logger` tagged with the venue. `NewMetrics` registers every collector on a fresh `prometheus.NewRegistry()`. Full API: `go doc ./internal/obs`.
 
-All 17 collectors are declared up front, including those that stay at zero until a later phase.
+All 17 collectors are declared up front. Every one of them is now written to.
 
 | Collector | Written by |
 |---|---|
@@ -17,7 +17,7 @@ All 17 collectors are declared up front, including those that stay at zero until
 | `ws_frames_received_total`, `parse_errors_total`, `range_errors_total` | `internal/supervisor`'s read loop |
 | `stream_status`, `clock_skew_ms`, `key_expired_total`, `reconnects_total`, `stream_restarts_total`, `leaked_goroutines`, `fallback_active` | `internal/health`, from the state it already tracks |
 | `fallback_polls_total` | `internal/fallback`, labelled `ok`, `error`, `empty` or `capacity` |
-| `rate_limit_used`, `rate_limit_denied_total` | nothing yet — M3 |
+| `rate_limit_used`, `rate_limit_denied_total` | `internal/ratelimit` — the fraction of each budget in use, and refusals |
 
 `ws_frames_received_total` is counted once per **distinct channel** a frame produced messages on, so one Binance markPrice frame increments `mark_price`, `index_price` and `funding`. The label set is per stream, and per-stream liveness is what the counter is read for; a socket-wide total would hide one channel going quiet. Acks and pongs produce no messages and increment nothing.
 

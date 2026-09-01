@@ -1,4 +1,4 @@
-Covers: M2 · `internal/supervisor`
+Covers: M3 · `internal/supervisor`
 
 Keeps one venue's sockets and streams running. Recovery is stream-level: a
 failed stream relaunches that stream's goroutine and nothing else, a dead socket
@@ -50,12 +50,24 @@ ERROR, relaunched anyway. Refusing would trade one stuck stream for a dead one.
 There is no tier 3. Quorum is half the socket's streams, never fewer than two:
 one key expiring is a stream problem, most of them is a connection problem.
 
+**Two kinds of expiry do not count at all.** One reported while the socket has no
+live connection: it is already dialing, every key it feeds will expire until it
+comes back, and redialling mid-dial only lengthens the outage. And one reported
+inside `ConnectGrace` of a connection coming up: those keys went stale during the
+outage that preceded it, and Redis reports an expiry when it reclaims the key,
+which is after the reconnect rather than when the TTL lapsed.
+
+Counting either turns a reconnect into a loop with no exit on any venue whose
+dial takes longer than the shortest TTL — which is every venue that bootstraps
+over REST. What is left is what the escalation is for: a socket that is
+connected, has been for a while, and is delivering for nobody.
+
 ## Key types and functions
 
 | Symbol | What it does |
 |---|---|
 | `New(Options) (*Process, error)` | Builds the tree; opens nothing |
-| `Options` | Venue, adapter, plans, publisher, `*health.Tracker`, metrics, logger, both backoff policies, `transport.BreakerOptions`, `LeakTimeout`, `ConnMaxAge`, `ExpiryWindow`, `OnMessage`, `Now` |
+| `Options` | Venue, adapter, plans, publisher, `*health.Tracker`, metrics, logger, both backoff policies, `transport.BreakerOptions`, `LeakTimeout`, `ConnMaxAge`, `ExpiryWindow`, `ConnectGrace`, `OnMessage`, `Now` |
 | `Process.Run(ctx)` | Supervises every socket until `ctx` ends |
 | `Process.KeyExpired(spec)` | The escalation entry point, called by the fallback watcher |
 | `Process.Leaked()` | Goroutines that never came back |
@@ -90,6 +102,12 @@ is the only coupling between the two.
 - **A publish failure does not restart the stream.** The publisher counts and
   rate-limit logs it, and the key expiring is the trigger both recovery tiers
   are already built on.
+- **Never escalate on an expiry a reconnect caused.** A socket redialling itself
+  for the keys its own outage staled is a loop that never converges, and it
+  looks from outside exactly like a venue refusing connections.
+- **Measure clock skew only from a venue send time.** `observeSkew` reads
+  `exchange_time_is_send_time`; an event time differenced against arrival reports
+  a skew that is really the age of the value.
 
 ## Not here
 

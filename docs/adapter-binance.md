@@ -1,4 +1,4 @@
-Covers: M2 · `internal/adapter/binance`
+Covers: M3 · `internal/adapter/binance`
 
 Binance USD-M futures over public unauthenticated websockets. Perpetual linear
 only. **No credential, no signature, no authenticated stream, no order path.**
@@ -7,7 +7,8 @@ only. **No credential, no signature, no authenticated stream, no order path.**
 |---|---|
 | `binance.go` | `New`, `Options`, symbol mapping, `PlanSubscriptions`, `SocketURL`, `Dial`, `RESTCost` |
 | `parse.go` | `Parse` and the payload structs |
-| `rest.go` | `FetchOnce` against `/fapi/v1/premiumIndex` |
+| `rest.go` | `FetchOnce` against `/fapi/v1/premiumIndex`, and the shared `get` |
+| `metadata.go` | `FetchMetadata` against `/fapi/v1/exchangeInfo` |
 | `binance_test.go` | Conformance, symbol round trip, planning, REST |
 | `determinism_test.go` | 1000 parses per fixture |
 | `smoke_test.go` | Live venue, build tag `smoke` |
@@ -20,7 +21,7 @@ only. **No credential, no signature, no authenticated stream, no order path.**
 | `Venue` | `"BINANCE"` |
 | `MarketType` | `PERP_LINEAR`, the only market served |
 | `Channels` | The three a frame produces, in the order `Parse` emits them |
-| `Options` | Endpoints, overrides, per-socket limit, read timeout, per-channel TTLs, dialer |
+| `Options` | Endpoints, overrides, per-socket limit, read timeout, per-channel TTLs, limiter, dialer |
 | `New(Options)` | Builds the adapter; opens nothing |
 | `Adapter` | Implements `core.Adapter` |
 | `SocketURL(plan)` | The combined-stream URL a plan dials |
@@ -73,6 +74,18 @@ being true for every symbol.
 | Server-initiated pings | `coder/websocket` answers them. Verified, not assumed — `transport.Conn.ServerPings` counts them and two tests check it. |
 | 24-hour disconnect | Binance drops long-lived sockets. `connection.max_age` (23h) redials first, so the handover is one we chose the moment of. |
 | Three channels, one stream | `PlanSubscriptions` deduplicates by venue stream — subscribing per channel would spend three slots and deliver each frame three times. |
+| Contracts trade in base units | `contract_multiplier` is published as **1**, stated rather than left zero: a consumer multiplying by a missing multiplier sizes nothing. |
+| Timestamps are send times | `exchange_time_is_send_time` is true on every message. `E` and `premiumIndex.time` are both stamped as the venue answers, so differencing against arrival is a clock comparison. |
+
+## Metadata
+
+`GET /fapi/v1/exchangeInfo`, weight 1, read hourly by `internal/metadata`. Only
+`contractType: PERPETUAL` symbols are taken; a dated delivery contract or a
+quote asset this adapter has no mapping for is **skipped, not an error** — the
+endpoint lists every contract Binance has, and failing on one nobody asked about
+would take the whole refresh down. A symbol that *is* served but whose filters do
+not parse is an error: that is the difference between "not ours" and "ours, and
+wrong". Field mapping is in [`metadata.md`](metadata.md).
 
 ## REST fallback
 

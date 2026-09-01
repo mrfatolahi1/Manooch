@@ -1,16 +1,22 @@
-Covers: M1 · `schema/manooch.proto`, `gen/manoochv1/`
+Covers: M3 · `schema/manooch.proto`, `gen/manoochv1/`
 
 The wire format between Manooch and every consumer. Generated Go is committed so a consumer never needs `protoc`.
 
 | File | Holds |
 |---|---|
-| `schema/manooch.proto` | 4 enums, 7 messages, `proto3`, package `manooch.v1` |
+| `schema/manooch.proto` | 4 enums, 9 messages, `proto3`, package `manooch.v1` |
 | `schema/README.md` | Evolution rules and the regeneration command |
-| `gen/manoochv1/manooch.pb.go` | Generated; 11 Go types. Do not edit |
+| `gen/manoochv1/manooch.pb.go` | Generated; 13 Go types. Do not edit |
 
-Enums: `MarketType` (spot, margin, perp/future × linear/inverse), `Channel` (mark_price, index_price, funding, metadata, health), `Source`, `Status` — each with `_UNSPECIFIED = 0`.
+Enums: `MarketType` (spot, margin, perp/future × linear/inverse), `Channel` (mark_price, index_price, funding, metadata, health, ratelimit), `Source`, `Status` — each with `_UNSPECIFIED = 0`.
 
-Messages: `Instrument`, `Envelope`, `MarkPrice`, `IndexPrice`, `Funding`, `InstrumentMeta`, `Health`. The last two are defined but nothing writes them yet.
+Messages: `Instrument`, `Envelope`, `MarkPrice`, `IndexPrice`, `Funding`, `InstrumentMeta`, `RateLimit`, `RateLimitBudget`, `Health`. Everything here is written by something.
+
+## `exchange_time_is_send_time`
+
+Added at M3, field 17. It says whether `exchange_time_ns` is the venue's clock at the moment it sent the message, so a consumer may difference it against `recv_time_ns`, or an event time that may be far in the past.
+
+KuCoin stamps a funding rate with the instant it settled — hours old on arrival — so differencing it reports a four-hour clock skew on a healthy venue. `internal/supervisor` measures skew only from a send time, and `publish.RedisPublisher` keeps event times out of the publish-latency histogram for the same reason. **The default is false**: a missing signal is better than a wrong one, so an adapter opts in.
 
 ## Scope reduction at M1
 
@@ -33,7 +39,7 @@ Both forms matter. The numeric reservation stops a future channel decoding as th
 
 | Filled by | Fields |
 |---|---|
-| Producer (a venue adapter) | `venue`, `instrument`, `channel`, `exchange_time_ns`, `recv_time_ns`, `venue_seq`, `venue_seq_present`, `source`, `status`, `status_reason` |
+| Producer (a venue adapter, `internal/metadata`, `internal/ratelimit`) | `venue`, `instrument`, `channel`, `exchange_time_ns`, `exchange_time_is_send_time`, `recv_time_ns`, `venue_seq`, `venue_seq_present`, `source`, `status`, `status_reason` |
 | `publish.RedisPublisher.Publish` | `publish_seq`, `instance_id`, `schema_version`, `publish_time_ns`, and `venue` if left empty |
 | Nothing yet | `price_exp`, `size_exp` — left `0`, which the schema defines as the global scale (`-11`, `-8`) |
 

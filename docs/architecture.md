@@ -1,6 +1,6 @@
-Covers: M2 · whole repository
+Covers: M3 · whole repository
 
-A market-data price service: connect to one exchange over public websockets, normalize, publish to Redis. One process per venue, selected by `--exchange`.
+A market-data price service: connect to one exchange over public websockets, normalize, publish to Redis. One process per venue, selected by `--exchange`. Two venues are served, Binance USD-M and KuCoin futures, and the service is complete.
 
 **Scope, permanently:** perpetual linear mark price, index price and funding. Order books and trades were dropped at M1.
 
@@ -9,7 +9,7 @@ A market-data price service: connect to one exchange over public websockets, nor
 | Pattern | Where | Status |
 |---|---|---|
 | Outbound port | `publish.Publisher`; `RedisPublisher` is the only implementation | built |
-| Inbound port | `core.Adapter`; `internal/adapter/binance` is the only implementation | built |
+| Inbound port | `core.Adapter`; `binance` and `kucoin` implement it | built |
 | Stateless pipeline | producer → envelope → marshal → Redis write; nothing stored in between | built |
 | Shared-nothing by venue | one process, one venue file, nothing shared across venues | built |
 | Supervision tree | `internal/supervisor`; stream-level recovery, no process exit | built |
@@ -21,12 +21,18 @@ Not Clean/Onion (no domain model to protect), not event sourcing (current value,
 ```
 process (one per venue)
 ├── health heartbeat        internal/health — ticker, transitions, the health keys
-├── fallback watcher        internal/fallback — expiry subscriber + EXISTS sweep
+├── metadata refresher      internal/metadata — the startup gate, then an hourly poll
 ├── http server             cmd/manooch-feed — loopback only
-└── socket supervisor       internal/supervisor — one per core.SocketPlan
-    ├── read loop           its own goroutine: it is what parks in conn.Read
-    └── stream goroutine    one per (market_type, symbol, channel)
+└── once metadata has landed
+    ├── fallback watcher    internal/fallback — expiry subscriber + EXISTS sweep
+    └── socket supervisor   internal/supervisor — one per core.SocketPlan
+        ├── read loop       its own goroutine: it is what parks in conn.Read
+        └── stream goroutine one per (market_type, symbol, channel)
 ```
+
+Health runs before the gate on purpose: it is what publishes `STALE` with
+`status_reason: "metadata unavailable"` while the first fetch is still failing.
+Until that fetch succeeds no socket is dialled at all.
 
 Nothing in it exits the process. One stream failing restarts that stream; a read
 error or enough of a socket's keys expiring together redials that socket; a
@@ -44,17 +50,24 @@ graph TD
   feed["cmd/manooch-feed"] --> adapter["internal/adapter"]
   feed --> supervisor["internal/supervisor"]
   feed --> fallback["internal/fallback"]
+  feed --> metadata["internal/metadata"]
+  feed --> ratelimit["internal/ratelimit"]
   feed --> obs["internal/obs"]
   cli["cmd/manooch-tap<br/>cmd/manooch-status"] --> publish["internal/publish"]
-  adapter --> binance["internal/adapter/binance"]
+  adapter --> venues["internal/adapter/binance<br/>internal/adapter/kucoin"]
   adapter --> config["internal/config"]
-  binance --> transport["internal/transport"]
-  binance --> publish
-  binance --> price["pkg/price"]
+  adapter --> ratelimit
+  venues --> transport["internal/transport"]
+  venues --> ratelimit
+  venues --> publish
+  venues --> price["pkg/price"]
   supervisor --> health["internal/health"]
   supervisor --> transport
   fallback --> health
   fallback --> publish
+  metadata --> publish
+  metadata --> transport
+  ratelimit --> publish
   health --> publish
   transport --> core["internal/core"]
   config --> core
@@ -90,15 +103,15 @@ sequenceDiagram
   P->>R: PUBLISH key bytes
 ```
 
-The REST fallback enters at the same `Publish` with `SOURCE_REST`, and the
-metadata refresher enters there with its own envelope. Everything from `Publish`
-rightward is identical for all three.
+The REST fallback enters at the same `Publish` with `SOURCE_REST`; the metadata
+refresher and the rate limiter enter there with their own envelopes. Everything
+from `Publish` rightward is identical for all of them.
 
 ## Redis layout
 
 ```
-Manooch:{VENUE}:{MARKET_TYPE}:{SYMBOL}:{channel}
-Manooch:{VENUE}:venue:{subject}
+Manooch:{VENUE}:{MARKET_TYPE}:{SYMBOL}:{channel}   mark_price, index_price, funding, metadata, health
+Manooch:{VENUE}:venue:{subject}                    health, ratelimit
 ```
 
 One pipelined round trip per message: `SET key bytes PX ttl_ms` then `PUBLISH key bytes`. The same string is key and channel; Redis keeps those namespaces separate.
@@ -132,21 +145,58 @@ The `SET` makes freshness a property of the data — key present means fresh, ke
 | Fallback trigger | The expired key itself, plus an `EXISTS` sweep | A second staleness clock beside the TTL is a second answer that eventually disagrees. |
 | Fallback labelling | Same channel and key, `SOURCE_REST` + `STATUS_DEGRADED` | Consumers keep one code path, and the difference is visible to anyone who checks. |
 | Health heartbeat | Republish every interval regardless of change | Pub/Sub is fire-and-forget, so silence must never mean both "quiet" and "dead". |
+| Metadata | A startup dependency: no metadata, no market data | A price at unknown precision, with no contract multiplier, is a number a consumer would size an order from and get wrong. |
+| Metadata refresh | Interval poll only, whole set republished each cycle | The venues publish no change feed, and a consumer that missed the one message announcing a tick change would never hear about it again. |
+| Tick size | Informational, never a scaling factor | Scaling is global, so a venue moving a tick reinterprets nothing already cached. That is what the global scale bought over a per-instrument exponent. |
+| Rate limiting | In-process token bucket, a fraction of the published limit | The order service shares this IP and cannot be seen from here; coordinating would make it depend on us. |
+| Rate-limit denial | Fail closed — the call does not happen, the stream says so | Proceeding on "it is probably fine" is how an IP ban is discovered rather than avoided. |
+| Shared limiter | A Redis key convention, documented and not built | A library would be a dependency; a convention is one both sides can implement alone. One process per venue does not need it yet. |
+| Venue timestamps | `exchange_time_is_send_time`, defaulting to false | An event time differenced against arrival is the age of the value, not a clock skew. A missing signal beats a wrong one. |
+| Cadence | Measured against the venue, not read from its docs | KuCoin's `granularity: 1000` is the granularity of the value, not a promise to send one; trusting it puts a working stream permanently on REST. |
 
 ## Milestone map
+
+Complete. Every path below is built and every config section is read.
 
 | Path | State |
 |---|---|
 | `pkg/price`, `internal/{core,config,publish,obs}`, `cmd/*` | built |
-| `internal/adapter/` | built — `binance`, plus the shared conformance suite |
+| `internal/adapter/` | built — `binance` and `kucoin`, plus the shared conformance suite |
 | `internal/transport/` | built — one websocket connection, backoff, circuit breaker |
 | `internal/supervisor/` | built — the restart procedure and both escalation tiers |
 | `internal/health/` | built — status computation, transition and heartbeat publishing |
 | `internal/fallback/` | built — expiry watcher, sweep backstop, REST poller |
+| `internal/metadata/` | built — the startup gate, the hourly refresh, the change log |
+| `internal/ratelimit/` | built — `LocalLimiter`; `RedisLimiter` documented, not built |
 | `internal/core/coretest/` | built — the `core.Conn` and `core.Adapter` fault-injection doubles |
-| `testdata/binance/` | built — one raw frame per case, beside its golden |
-| `internal/metadata/` | empty — instrument metadata refresh, M3 |
+| `testdata/{binance,kucoin}/` | built — one raw frame per case, beside its golden |
 
-Config sections `metadata` and `rate_limit` parse and validate but nothing reads them. `FetchMetadata` returns `core.ErrNotImplemented`.
+Deliberately not built: `RedisLimiter`, venue-level rollup status, adaptive
+staleness thresholds, spot/margin/inverse/dated support, order books, trades, a
+third venue, historical storage, an HTTP endpoint serving market data.
 
-Not built, and deliberately not designed for: the rate limiter, metadata refresh, venue-level rollup status, adaptive staleness thresholds, a second venue.
+## Did the second venue reach `internal/core`?
+
+The question M3 existed to answer. **`internal/core` was not touched to make
+KuCoin work.** `RunAdapterConformance` and `RunAdapterDeterminism` run against
+`testdata/kucoin/` with no venue-specific branch anywhere in them.
+
+Everything KuCoin does differently was absorbed inside its own package: a public
+REST bootstrap before the socket can be opened, a client-side ping the connection
+owns, two subjects on one topic at two cadences, unquoted JSON numbers, and a
+symbol spelling that shares no rule with Binance's. `Dial` already promised a
+connection whose subscriptions were live, which was exactly the shape a
+bootstrapping venue needed.
+
+Four things did change, and none of them was a workaround:
+
+| Change | Why it was the interface, not the venue |
+|---|---|
+| `Envelope.exchange_time_is_send_time` | The pipeline assumed every venue timestamp was a clock reading. KuCoin stamps a funding rate with its settlement instant, and differencing that against arrival reported a four-hour clock skew on a healthy venue. Found by a live smoke test, not a fixture. |
+| `supervisor.ConnectGrace` | The escalation counted expiries caused by the reconnect that had just fixed them — a loop with no exit on any venue whose dial outlasts the shortest TTL. Binance's direct dial had hidden it. |
+| `endpoints.ws` accepts `https` | Not every venue lets you dial the socket directly. The alternative was a config key holding an address nothing reads. |
+| `config.VenueSymbol` deleted | A fallback rule in the config package had to be right for every venue at once, which stopped being possible when the second one spelled bitcoin `XBT`. `--validate` now asks the adapter. |
+
+The two found live are the ones worth remembering: fixtures prove that a frame
+we have seen becomes what we expect, and nothing more. What a venue's timestamps
+*mean*, and how often it really pushes, only show up against the venue.

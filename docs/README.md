@@ -9,10 +9,13 @@ Start with [`architecture.md`](architecture.md): the shape, the dependency rule,
 | [`core.md`](core.md) | `internal/core` — instrument identity, enum mapping |
 | [`adapter.md`](adapter.md) | `internal/core/adapter.go`, `internal/adapter/` — the inbound port |
 | [`adapter-binance.md`](adapter-binance.md) | `internal/adapter/binance` — endpoint, payload mapping, quirks |
+| [`adapter-kucoin.md`](adapter-kucoin.md) | `internal/adapter/kucoin` — bullet bootstrap, client ping, split subjects |
 | [`transport.md`](transport.md) | `internal/transport` — websocket connections, backoff, circuit breaker |
 | [`supervisor.md`](supervisor.md) | `internal/supervisor` — the restart procedure and the escalation tiers |
 | [`health.md`](health.md) | `internal/health` — status semantics, TTL as freshness, the heartbeat |
 | [`fallback.md`](fallback.md) | `internal/fallback` — expiry trigger, REST polling, escalation to `STALE` |
+| [`metadata.md`](metadata.md) | `internal/metadata` — refresh cycle, startup dependency, change logging |
+| [`ratelimit.md`](ratelimit.md) | `internal/ratelimit` — the local limiter, budgets, headroom |
 | [`publish.md`](publish.md) | `internal/publish` — key scheme and the write path |
 | [`obs.md`](obs.md) | `internal/obs` — logger and collectors |
 | [`cli.md`](cli.md) | `cmd/*` — the three binaries |
@@ -20,4 +23,4 @@ Start with [`architecture.md`](architecture.md): the shape, the dependency rule,
 
 Building and running: the repository [`README.md`](../README.md). Per-symbol detail: `go doc ./internal/<pkg>` — every exported symbol has a doc comment.
 
-`internal/metadata/` is empty; `architecture.md` says what it is reserved for.
+The service is complete: every package listed here is built, and `architecture.md` records what was deliberately left out.

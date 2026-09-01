@@ -1,4 +1,4 @@
-Covers: M1 · `internal/core`
+Covers: M3 · `internal/core`
 
 Instrument identity, the mapping between protobuf enum values and the strings used in config files and Redis keys, and the venue-adapter port. `internal/config`, `internal/publish`, `internal/transport` and every venue package depend on it, which is why it depends on none of them.
 

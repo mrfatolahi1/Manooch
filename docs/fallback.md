@@ -1,4 +1,4 @@
-Covers: M2 · `internal/fallback`
+Covers: M3 · `internal/fallback`
 
 Notices when a stream's Redis key expires and serves that stream over REST until
 its socket comes back. The key expiring is the whole trigger: there is no

@@ -1,4 +1,4 @@
-Covers: M2 · `internal/publish`
+Covers: M3 · `internal/publish`
 
 The Redis key scheme and the only write path onto it. Producers depend on the `Publisher` interface, not on a Redis client.
 
@@ -25,7 +25,7 @@ A `ttl` above zero but under a millisecond is raised to `1`, because Redis rejec
 
 `ttl = quirks.cadence[channel] × health.ttl_multiplier`, from `config.TTL`. The `SET … PX` makes the last-value cache and the liveness signal one object: key present means fresh, key absent means stale, and there is no second timestamp that could disagree with the first.
 
-That is also the whole trigger for M2's recovery. An expired key fires `__keyevent@0__:expired`, which `internal/fallback` reacts to; nothing polls a separate staleness clock. What a TTL cannot say — fresh but sourced from REST, socket reconnecting — rides inside the value as `status` and `status_reason`, which `internal/supervisor` stamps immediately before each `Publish`. See `health.md`.
+That is also the whole trigger for recovery. An expired key fires `__keyevent@0__:expired`, which `internal/fallback` reacts to; nothing polls a separate staleness clock. What a TTL cannot say — fresh but sourced from REST, socket reconnecting — rides inside the value as `status` and `status_reason`, which `internal/supervisor` stamps immediately before each `Publish`. See `health.md`.
 
 `RedisPublisher.Redis` exposes the client for the two reads the write path does not do: the fallback watcher's keyspace subscription and its pipelined `EXISTS` sweep. It is not a way to write.
 

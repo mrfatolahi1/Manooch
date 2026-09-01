@@ -1,4 +1,4 @@
-Covers: M2 · `internal/transport`
+Covers: M3 · `internal/transport`
 
 One open websocket wrapping `coder/websocket` as `core.Conn`, plus the retry
 arithmetic above it. It knows nothing about venues, payloads or Redis: it opens
@@ -22,7 +22,7 @@ does not, and says how long to wait before trying again.
 | `Options` | `URL`, `ReadTimeout`, `MaxFrameBytes`, `HTTPClient`, `HTTPHeader` |
 | `Dialer` | `func(ctx, Options) (core.Conn, error)`; adapters take one so a test can substitute |
 | `Conn.Read(ctx)` | Blocks for one frame, returns it with `recvNs` |
-| `Conn.Write(ctx, b)` | One text frame, for client-initiated pings (M3) |
+| `Conn.Write(ctx, b)` | One text frame, for subscribe messages and client-initiated pings |
 | `Conn.Close()` | Safe from another goroutine, and unblocks `Read` |
 | `Conn.ServerPings()` / `Conn.URL()` | Pings the venue sent; the address, for logs |
 | `ErrIdle` | Connected and silent past the read timeout |

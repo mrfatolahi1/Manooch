@@ -1,4 +1,4 @@
-Covers: M0 · `pkg/price`
+Covers: M3 · `pkg/price`
 
 Fixed-point `int64` types for every price, size and rate. Under `pkg/` because consumers import it to decode what we publish.
 
