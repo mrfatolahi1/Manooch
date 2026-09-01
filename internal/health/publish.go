@@ -6,7 +6,6 @@ import (
 
 	pb "github.com/you/manooch/gen/manoochv1"
 	"github.com/you/manooch/internal/publish"
-	"google.golang.org/protobuf/proto"
 )
 
 // healthTTLMultiple is how many heartbeats a health key survives without one.
@@ -97,7 +96,8 @@ func (t *Tracker) snapshotInstrument(in *instrument) snapshot {
 	}
 
 	// Age is the oldest of the instrument's channels: the freshest one says
-	// nothing about whether the other two are still arriving.
+	// nothing about whether the other two are still arriving. Minus one is
+	// "nothing has ever arrived", which is not the same as "arrived just now".
 	var ageMS int64 = -1
 	if anyReceived {
 		ageMS = t.now().Sub(oldest).Milliseconds()
@@ -168,6 +168,8 @@ func (t *Tracker) write(ctx context.Context, msgs []snapshot) {
 			// the publisher is alive and its content would say nothing.
 			continue
 		}
-		_ = t.opts.Publisher.Publish(ctx, m.key, proto.Clone(m.msg), ttl)
+		// The snapshot was built fresh under the mutex, so the publisher owns
+		// the envelope it is about to stamp and nothing else holds it.
+		_ = t.opts.Publisher.Publish(ctx, m.key, m.msg, ttl)
 	}
 }
