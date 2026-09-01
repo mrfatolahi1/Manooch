@@ -97,11 +97,12 @@ func (t *tap) handle(key string, payload []byte, asJSON, raw bool) {
 	}
 	ch := parts.Channel
 	if parts.VenueScoped {
-		if parts.Subject != publish.SubjectHealth {
+		sub, ok := publish.ChannelForSubject(parts.Subject)
+		if !ok {
 			fmt.Printf("%s  %s  %d bytes\n", stamp(time.Now()), key, len(payload))
 			return
 		}
-		ch = pb.Channel_CHANNEL_HEALTH
+		ch = sub
 	}
 
 	msg, env, err := publish.Decode(ch, payload)
@@ -171,6 +172,13 @@ func summarize(msg any) string {
 	case *pb.InstrumentMeta:
 		return fmt.Sprintf("tick=%s lot=%s min=%s active=%v",
 			price.Price(m.TickSize), price.Size(m.LotSize), price.Size(m.MinSize), m.Active)
+
+	case *pb.RateLimit:
+		parts := make([]string, 0, len(m.Budgets))
+		for _, b := range m.Budgets {
+			parts = append(parts, fmt.Sprintf("%s=%d/%d", b.Kind, b.Used, b.Capacity))
+		}
+		return strings.Join(parts, " ")
 
 	case *pb.Health:
 		s := fmt.Sprintf("status=%s age=%dms reconnects=%d skew=%dms",

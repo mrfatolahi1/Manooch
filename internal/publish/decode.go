@@ -25,6 +25,8 @@ func NewMessage(ch pb.Channel) (proto.Message, error) {
 		return &pb.InstrumentMeta{}, nil
 	case pb.Channel_CHANNEL_HEALTH:
 		return &pb.Health{}, nil
+	case pb.Channel_CHANNEL_RATELIMIT:
+		return &pb.RateLimit{}, nil
 	default:
 		return nil, fmt.Errorf("no message type for channel %v", ch)
 	}

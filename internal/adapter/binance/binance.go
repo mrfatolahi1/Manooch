@@ -18,6 +18,7 @@ import (
 
 	pb "github.com/you/manooch/gen/manoochv1"
 	"github.com/you/manooch/internal/core"
+	"github.com/you/manooch/internal/ratelimit"
 	"github.com/you/manooch/internal/transport"
 )
 
@@ -73,6 +74,11 @@ type Options struct {
 	// TTLs is the Redis key TTL per channel, derived from the venue's cadence.
 	TTLs map[pb.Channel]time.Duration
 
+	// Limiter budgets the venue's rate limits. Zero means ratelimit.Unlimited,
+	// which is only ever right in a test: the daemon builds one from the venue
+	// file before it builds an adapter.
+	Limiter ratelimit.Limiter
+
 	// Dial opens a socket. Zero means transport.Dial; a test substitutes.
 	Dial transport.Dialer
 
@@ -106,6 +112,9 @@ func New(opts Options) (*Adapter, error) {
 	}
 	if opts.Dial == nil {
 		opts.Dial = transport.Dial
+	}
+	if opts.Limiter == nil {
+		opts.Limiter = ratelimit.Unlimited{}
 	}
 	if opts.HTTPClient == nil {
 		opts.HTTPClient = http.DefaultClient
@@ -274,6 +283,12 @@ func (a *Adapter) Dial(ctx context.Context, plan core.SocketPlan) (core.Conn, er
 	u, err := a.SocketURL(plan)
 	if err != nil {
 		return nil, err
+	}
+	// Budgeted before the socket is opened, not after: a dial that is refused
+	// must not happen at all. The caller reports the streams DEGRADED and
+	// backs off, which is the whole reason the limiter exists.
+	if err := a.opts.Limiter.Allow(ctx, Venue, ratelimit.LimitWSConnect, 1); err != nil {
+		return nil, fmt.Errorf("binance: dial %s: %w", plan.ID, err)
 	}
 	return a.opts.Dial(ctx, transport.Options{
 		URL:           u,

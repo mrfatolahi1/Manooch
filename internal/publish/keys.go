@@ -33,6 +33,22 @@ const (
 	SubjectRateLimit = "ratelimit"
 )
 
+// venueSubjects is what each venue-wide subject carries. A key's subject is
+// the only thing that says what its bytes are, the same way a data key's
+// channel component is.
+var venueSubjects = map[string]pb.Channel{
+	SubjectHealth:    pb.Channel_CHANNEL_HEALTH,
+	SubjectRateLimit: pb.Channel_CHANNEL_RATELIMIT,
+}
+
+// ChannelForSubject maps a venue-scoped key's subject to the channel whose
+// message type it holds. It exists for manooch-tap and manooch-status, which
+// are handed arbitrary keys by Redis and have nothing else to go on.
+func ChannelForSubject(subject string) (pb.Channel, bool) {
+	ch, ok := venueSubjects[subject]
+	return ch, ok
+}
+
 var (
 	venueRe   = regexp.MustCompile(`^[A-Z0-9]+$`)
 	symbolRe  = regexp.MustCompile(core.CanonicalPattern)

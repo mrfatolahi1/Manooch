@@ -102,7 +102,7 @@ func run() error {
 
 	// Resolved before anything is opened, so an unknown venue or an unservable
 	// stream fails with no Redis connection and no bound port behind it.
-	prod, err := planProducers(f, cfg)
+	prod, err := planProducers(f, cfg, logger)
 	if err != nil {
 		return err
 	}

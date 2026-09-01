@@ -116,7 +116,8 @@ type row struct {
 	restarts   uint32
 	reason     string
 
-	// venueScoped marks Manooch:{VENUE}:venue:health, the connection-level row.
+	// venueScoped marks a Manooch:{VENUE}:venue:{subject} row, which describes
+	// the connection rather than any one instrument.
 	venueScoped bool
 	// health is set on any row carrying a Health payload, which is what the
 	// restart counts are attached from.
@@ -197,12 +198,13 @@ func readRows(ctx context.Context, rdb *redis.Client, keys []string) ([]row, err
 
 		ch := parts.Channel
 		if parts.VenueScoped {
-			if parts.Subject != publish.SubjectHealth {
+			sub, ok := publish.ChannelForSubject(parts.Subject)
+			if !ok {
 				r.reason = fmt.Sprintf("%d bytes", len(payload))
 				rows = append(rows, r)
 				continue
 			}
-			ch = pb.Channel_CHANNEL_HEALTH
+			ch = sub
 		}
 
 		msg, env, err := publish.Decode(ch, payload)
@@ -220,9 +222,14 @@ func readRows(ctx context.Context, rdb *redis.Client, keys []string) ([]row, err
 		}
 		r.publishSeq = env.PublishSeq
 		r.reason = env.StatusReason
-		if h, ok := msg.(*pb.Health); ok {
-			r.health = h
-			r.restarts = h.StreamRestartCount
+		switch m := msg.(type) {
+		case *pb.Health:
+			r.health = m
+			r.restarts = m.StreamRestartCount
+		case *pb.RateLimit:
+			// Advisory: what this process has spent of the venue's budget.
+			// Spelled out here because no other row carries it.
+			r.reason = strings.TrimSpace(r.reason + " " + budgetSummary(m))
 		}
 		rows = append(rows, r)
 	}
@@ -256,6 +263,15 @@ func attachHealth(rows []row) {
 			r.restarts = restarts[r.venue+"|"+r.marketType+"|"+r.symbol]
 		}
 	}
+}
+
+// budgetSummary renders the rate-limit budgets as "rest_weight=3/3000".
+func budgetSummary(m *pb.RateLimit) string {
+	parts := make([]string, 0, len(m.Budgets))
+	for _, b := range m.Budgets {
+		parts = append(parts, fmt.Sprintf("%s=%d/%d", b.Kind, b.Used, b.Capacity))
+	}
+	return strings.Join(parts, " ")
 }
 
 // venueReason spells out what only the connection-level row knows.

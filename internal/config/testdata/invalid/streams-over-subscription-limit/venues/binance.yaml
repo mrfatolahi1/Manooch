@@ -1,0 +1,40 @@
+venue: BINANCE
+enabled: true
+
+endpoints:
+  ws:
+    PERP_LINEAR: "wss://fstream.binance.com/stream"
+  rest:
+    PERP_LINEAR: "https://fapi.binance.com"
+
+rate_limit:
+  rest_weight_per_minute: 2400
+  max_weight_fraction: 0.5
+  ws_connect_per_5min: 300
+  ws_connect_fraction: 0.5
+  subscriptions_per_connection: 200
+
+connection:
+  max_streams_per_socket: 300
+  ping_interval: 20s
+  pong_timeout: 10s
+  read_timeout: 60s
+  # Binance drops a futures socket after 24 hours. Redial before it does.
+  max_age: 23h
+
+quirks:
+  timestamp_unit: ms               # ms|us|ns|s
+  # One markPrice frame carries all three, so all three share a cadence here.
+  # ttl = cadence * health.ttl_multiplier.
+  cadence:
+    mark_price:  1s
+    index_price: 1s
+    funding:     1s
+
+symbol_overrides:
+  BTC_USDT: BTCUSDT
+
+instruments:
+  - market_type: PERP_LINEAR
+    channels: [mark_price, index_price, funding]
+    symbols: [BTC_USDT, ETH_USDT]

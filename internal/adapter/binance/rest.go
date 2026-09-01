@@ -11,6 +11,7 @@ import (
 
 	pb "github.com/you/manooch/gen/manoochv1"
 	"github.com/you/manooch/internal/core"
+	"github.com/you/manooch/internal/ratelimit"
 	"github.com/you/manooch/pkg/price"
 	"google.golang.org/protobuf/proto"
 )
@@ -53,6 +54,11 @@ func (a *Adapter) FetchOnce(ctx context.Context, spec core.StreamSpec) ([]core.M
 	sym, err := a.VenueSymbol(spec.Instrument)
 	if err != nil {
 		return nil, err
+	}
+	// The poll does not happen if there is no budget for it. The caller marks
+	// the stream STALE, which is the truth: nothing is refreshing that key.
+	if err := a.opts.Limiter.Allow(ctx, Venue, ratelimit.LimitRESTWeight, a.RESTCost(core.OpFetchOnce)); err != nil {
+		return nil, fmt.Errorf("binance: fetch %s: %w", spec, err)
 	}
 
 	u := a.opts.RESTEndpoint + premiumIndexPath + "?" + url.Values{"symbol": {sym}}.Encode()

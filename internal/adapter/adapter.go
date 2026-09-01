@@ -11,11 +11,22 @@ import (
 	"github.com/you/manooch/internal/adapter/binance"
 	"github.com/you/manooch/internal/config"
 	"github.com/you/manooch/internal/core"
+	"github.com/you/manooch/internal/ratelimit"
 )
+
+// Deps are the process-level collaborators a venue package is handed. They are
+// process-level rather than per-adapter because the venue's budget is: two
+// adapters with a limiter each would each stay inside a limit they were both
+// spending.
+type Deps struct {
+	// Limiter budgets REST weight and websocket connects. Zero means
+	// ratelimit.Unlimited.
+	Limiter ratelimit.Limiter
+}
 
 // builders maps a venue name to its constructor. A venue package never reads
 // config itself — it is handed resolved values — so the translation lives here.
-var builders = map[string]func(*config.Config) (core.Adapter, error){
+var builders = map[string]func(*config.Config, Deps) (core.Adapter, error){
 	binance.Venue: newBinance,
 }
 
@@ -27,12 +38,15 @@ func Venues() []string { return slices.Sorted(maps.Keys(builders)) }
 // An unknown venue is a startup error naming it and what is available: a
 // process that starts against a venue it cannot serve would sit there
 // publishing nothing, which looks exactly like a venue that went quiet.
-func New(cfg *config.Config) (core.Adapter, error) {
+func New(cfg *config.Config, deps Deps) (core.Adapter, error) {
 	build, ok := builders[cfg.Venue]
 	if !ok {
 		return nil, fmt.Errorf("no adapter for venue %q; this build serves %v", cfg.Venue, Venues())
 	}
-	return build(cfg)
+	if deps.Limiter == nil {
+		deps.Limiter = ratelimit.Unlimited{}
+	}
+	return build(cfg, deps)
 }
 
 // Specs expands the config's streams into the adapter's unit of work. It is
@@ -50,7 +64,7 @@ func Specs(cfg *config.Config) ([]core.StreamSpec, error) {
 	return specs, nil
 }
 
-func newBinance(cfg *config.Config) (core.Adapter, error) {
+func newBinance(cfg *config.Config, deps Deps) (core.Adapter, error) {
 	mt := core.MarketTypeName(binance.MarketType)
 	return binance.New(binance.Options{
 		WSEndpoint:          cfg.Endpoints.WS[mt],
@@ -59,5 +73,6 @@ func newBinance(cfg *config.Config) (core.Adapter, error) {
 		MaxStreamsPerSocket: cfg.Connection.MaxStreamsPerSocket,
 		ReadTimeout:         cfg.Connection.ReadTimeout.Std(),
 		TTLs:                cfg.TTLs(),
+		Limiter:             deps.Limiter,
 	})
 }

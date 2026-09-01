@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/you/manooch/internal/adapter"
 	"github.com/you/manooch/internal/config"
@@ -13,6 +14,7 @@ import (
 	"github.com/you/manooch/internal/health"
 	"github.com/you/manooch/internal/obs"
 	"github.com/you/manooch/internal/publish"
+	"github.com/you/manooch/internal/ratelimit"
 	"github.com/you/manooch/internal/supervisor"
 	"github.com/you/manooch/internal/synth"
 	"github.com/you/manooch/internal/transport"
@@ -24,18 +26,23 @@ type producers struct {
 	synthetic bool
 	adapter   core.Adapter
 	plans     []core.SocketPlan
+	limiter   *ratelimit.LocalLimiter
 }
 
 // planProducers resolves everything the config can get wrong. It opens
 // nothing — no socket, no REST call — so an unknown venue or a stream this
 // venue cannot serve fails at startup rather than becoming a key nobody ever
 // writes, which reads exactly like a venue that went quiet.
-func planProducers(f flags, cfg *config.Config) (*producers, error) {
+func planProducers(f flags, cfg *config.Config, log *slog.Logger) (*producers, error) {
 	if f.synthetic {
 		return &producers{synthetic: true}, nil
 	}
 
-	a, err := adapter.New(cfg)
+	limiter, err := newLimiter(cfg, log)
+	if err != nil {
+		return nil, err
+	}
+	a, err := adapter.New(cfg, adapter.Deps{Limiter: limiter})
 	if err != nil {
 		return nil, err
 	}
@@ -50,7 +57,44 @@ func planProducers(f flags, cfg *config.Config) (*producers, error) {
 	if len(plans) == 0 {
 		return nil, errors.New("config declares no streams")
 	}
-	return &producers{adapter: a, plans: plans}, nil
+	return &producers{adapter: a, plans: plans, limiter: limiter}, nil
+}
+
+// newLimiter translates the venue's published limits into the budget this
+// process will spend.
+//
+// Every capacity is a fraction of what the venue allows, never all of it: the
+// limiter is blind to the order service, which shares this host's IP and spends
+// against the same limits. The subscription budget is derived rather than
+// configured — as many subscribe frames as the connect budget could possibly
+// need — because the venue's subscription limit is per connection, which
+// PlanSubscriptions already respects, and inventing a rate for it would be a
+// number nobody chose.
+func newLimiter(cfg *config.Config, log *slog.Logger) (*ratelimit.LocalLimiter, error) {
+	rest := ratelimit.Bucket{
+		Capacity: cfg.RateLimit.RESTWeightPerMinute,
+		Window:   time.Minute,
+	}.Fraction(cfg.RateLimit.MaxWeightFraction)
+
+	connect := ratelimit.Bucket{
+		Capacity: cfg.RateLimit.WSConnectPer5Min,
+		Window:   5 * time.Minute,
+	}.Fraction(cfg.RateLimit.WSConnectFraction)
+
+	subscriptions := ratelimit.Bucket{
+		Capacity: cfg.RateLimit.SubscriptionsPerConnection * connect.Capacity,
+		Window:   connect.Window,
+	}
+
+	return ratelimit.New(ratelimit.Options{
+		Venue: cfg.Venue,
+		Buckets: map[ratelimit.LimitKind]ratelimit.Bucket{
+			ratelimit.LimitRESTWeight:    rest,
+			ratelimit.LimitWSConnect:     connect,
+			ratelimit.LimitSubscriptions: subscriptions,
+		},
+		Log: log,
+	})
 }
 
 // start launches the supervision tree and returns a group that closes once
@@ -73,6 +117,10 @@ func (p *producers) start(ctx context.Context, cfg *config.Config, pub *publish.
 		}()
 		return &wg, nil
 	}
+
+	// The limiter was built before Redis was dialled, because the adapter needed
+	// it. Now there is somewhere to write the advisory key.
+	p.limiter.AttachPublisher(pub)
 
 	tracker, err := health.New(health.Options{
 		Venue:               cfg.Venue,

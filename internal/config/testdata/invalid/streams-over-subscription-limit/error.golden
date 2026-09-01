@@ -1,0 +1,1 @@
+<config>/venues/binance.yaml: connection.max_streams_per_socket: is 300 but rate_limit.subscriptions_per_connection is 200; the venue would refuse the extra subscriptions

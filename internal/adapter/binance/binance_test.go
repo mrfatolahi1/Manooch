@@ -13,6 +13,8 @@ import (
 	"github.com/you/manooch/internal/adapter/adaptertest"
 	"github.com/you/manooch/internal/adapter/binance"
 	"github.com/you/manooch/internal/core"
+	"github.com/you/manooch/internal/ratelimit"
+	"github.com/you/manooch/internal/transport"
 	"github.com/you/manooch/pkg/price"
 )
 
@@ -589,4 +591,63 @@ func contains(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+// ---------- rate limiting ----------
+
+// denyingLimiter refuses everything, which is what a spent budget looks like
+// from inside an adapter.
+type denyingLimiter struct{}
+
+func (denyingLimiter) Allow(context.Context, string, ratelimit.LimitKind, int) error {
+	return ratelimit.ErrBudgetExhausted
+}
+func (denyingLimiter) Used(string, ratelimit.LimitKind) (int, int) { return 0, 0 }
+
+// TestLimiterDenialStopsTheRequest: a denial means the operation does not
+// happen and the caller is told, never that we proceeded on the assumption
+// that it was probably fine. The fallback poller turns the error into STALE
+// and the supervisor turns it into a failed dial.
+func TestLimiterDenialStopsTheRequest(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		_, _ = w.Write([]byte(premiumIndexBody))
+	}))
+	t.Cleanup(srv.Close)
+
+	a, err := binance.New(binance.Options{
+		WSEndpoint:          "wss://fstream.binance.com/stream",
+		RESTEndpoint:        srv.URL,
+		MaxStreamsPerSocket: 100,
+		Limiter:             denyingLimiter{},
+		TTLs: map[pb.Channel]time.Duration{
+			pb.Channel_CHANNEL_MARK_PRICE:  3 * time.Second,
+			pb.Channel_CHANNEL_INDEX_PRICE: 3 * time.Second,
+			pb.Channel_CHANNEL_FUNDING:     3 * time.Second,
+		},
+		Dial: func(context.Context, transport.Options) (core.Conn, error) {
+			t.Error("Dial reached the transport with no connect budget")
+			return nil, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = a.FetchOnce(context.Background(), spec(t, "BTC_USDT", pb.Channel_CHANNEL_MARK_PRICE))
+	if !errors.Is(err, ratelimit.ErrBudgetExhausted) {
+		t.Errorf("FetchOnce = %v, want ErrBudgetExhausted", err)
+	}
+	if calls != 0 {
+		t.Errorf("the venue was called %d times with no budget", calls)
+	}
+
+	plans, err := a.PlanSubscriptions([]core.StreamSpec{spec(t, "BTC_USDT", pb.Channel_CHANNEL_MARK_PRICE)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Dial(context.Background(), plans[0]); !errors.Is(err, ratelimit.ErrBudgetExhausted) {
+		t.Errorf("Dial = %v, want ErrBudgetExhausted", err)
+	}
 }

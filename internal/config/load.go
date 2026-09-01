@@ -166,6 +166,7 @@ func (c *Config) validate(p *provenance) error {
 	errs = append(errs, c.validateHTTP(p)...)
 	errs = append(errs, c.validateHealth(p)...)
 	errs = append(errs, c.validateEndpoints(p)...)
+	errs = append(errs, c.validateRateLimit(p)...)
 	errs = append(errs, c.validateCadence(p)...)
 	errs = append(errs, c.validateSymbolOverrides(p)...)
 	errs = append(errs, c.resolveInstruments(p)...)
@@ -218,6 +219,19 @@ func (c *Config) validateHealth(p *provenance) []error {
 		return []error{p.errf("health.clock_skew_stale_ms",
 			"is %d but must be greater than health.clock_skew_degraded_ms (%d)",
 			c.Health.ClockSkewStaleMS, c.Health.ClockSkewDegradedMS)}
+	}
+	return nil
+}
+
+// validateRateLimit checks the venue's own limits against the plan we build
+// from them. A socket carrying more streams than the venue accepts on one
+// connection is refused at subscribe time, which looks like a venue outage
+// rather than a config error.
+func (c *Config) validateRateLimit(p *provenance) []error {
+	if c.Connection.MaxStreamsPerSocket > c.RateLimit.SubscriptionsPerConnection {
+		return []error{p.errf("connection.max_streams_per_socket",
+			"is %d but rate_limit.subscriptions_per_connection is %d; the venue would refuse the extra subscriptions",
+			c.Connection.MaxStreamsPerSocket, c.RateLimit.SubscriptionsPerConnection)}
 	}
 	return nil
 }

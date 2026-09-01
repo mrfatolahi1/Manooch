@@ -28,6 +28,7 @@ enum Channel {
   CHANNEL_FUNDING     = 5;
   CHANNEL_METADATA    = 6;
   CHANNEL_HEALTH      = 7;
+  CHANNEL_RATELIMIT   = 8;
 }
 
 enum Source {
@@ -110,6 +111,20 @@ message InstrumentMeta {
   int64    contract_multiplier = 7;   // size scale
   bool     active              = 8;
   int64    last_refresh_ns     = 9;
+}
+
+// RateLimit is advisory: the order service shares this host's IP and may read
+// it, and nothing here breaks if it never does.
+message RateLimit {
+  Envelope                 env     = 1;
+  repeated RateLimitBudget budgets = 2;
+}
+
+message RateLimitBudget {
+  string kind      = 1;   // "rest_weight", "ws_connect", "subscriptions"
+  int64  used      = 2;
+  int64  capacity  = 3;
+  int64  window_ms = 4;
 }
 
 message Health {
