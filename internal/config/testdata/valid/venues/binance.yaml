@@ -19,6 +19,8 @@ connection:
   ping_interval: 20s
   pong_timeout: 10s
   read_timeout: 60s
+  # Binance drops a futures socket after 24 hours. Redial before it does.
+  max_age: 23h
 
 quirks:
   timestamp_unit: ms               # ms|us|ns|s

@@ -146,6 +146,7 @@ func (p *producers) start(ctx context.Context, cfg *config.Config, pub *publish.
 			OpenDuration:        cfg.Supervisor.CircuitBreaker.OpenDuration.Std(),
 		},
 		LeakTimeout: cfg.Supervisor.GoroutineLeakTimeout.Std(),
+		ConnMaxAge:  cfg.Connection.MaxAge.Std(),
 		OnMessage:   onMessage,
 	})
 	if err != nil {

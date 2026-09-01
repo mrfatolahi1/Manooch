@@ -166,6 +166,34 @@ func newHarness(t *testing.T, symbols ...string) *harness {
 	return h
 }
 
+// withMaxAge rebuilds the process with a connection age limit, which is only
+// settable at construction.
+func (h *harness) withMaxAge(t *testing.T, d time.Duration) {
+	t.Helper()
+	plans, err := h.adapter.PlanSubscriptions(h.specs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.proc, err = supervisor.New(supervisor.Options{
+		Venue:         coretest.Venue,
+		Adapter:       h.adapter,
+		Plans:         plans,
+		Publisher:     h.pub,
+		Health:        h.tracker,
+		Metrics:       h.metrics,
+		Log:           quiet(),
+		StreamBackoff: fastBackoff(),
+		SocketBackoff: fastBackoff(),
+		Breaker:       transport.BreakerOptions{ConsecutiveFailures: 10, OpenDuration: time.Hour},
+		LeakTimeout:   leakTimeout,
+		ExpiryWindow:  time.Minute,
+		ConnMaxAge:    d,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func (h *harness) newConn() *coretest.Conn {
 	c := coretest.NewConn()
 	h.mu.Lock()
@@ -489,4 +517,26 @@ func TestStatusIsStampedBySupervisorNotAdapter(t *testing.T) {
 	if env.StatusReason == "" {
 		t.Error("STALE published with no reason")
 	}
+}
+
+// TestProactiveReconnectAtMaxAge: Binance drops a futures socket after twenty-
+// four hours. Going first turns that from a gap into a handover — the streams
+// stay inside their TTL across it and nobody finds out by not being sent data.
+func TestProactiveReconnectAtMaxAge(t *testing.T) {
+	h := newHarness(t)
+	h.withMaxAge(t, 30*time.Millisecond)
+	h.run(t)
+
+	first := h.conn(t, 0)
+	first.Push([]byte("BTC_USDT"))
+	mark := key("BTC_USDT", pb.Channel_CHANNEL_MARK_PRICE)
+	eventually(t, "first publish", func() bool { return h.pub.count(mark) > 0 })
+
+	// Nothing failed: the socket is healthy and still gets replaced.
+	eventually(t, "the aged socket to be closed", first.IsClosed)
+
+	second := h.conn(t, 1)
+	before := h.pub.count(mark)
+	second.Push([]byte("BTC_USDT"))
+	eventually(t, "the replacement socket to publish", func() bool { return h.pub.count(mark) > before })
 }

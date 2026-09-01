@@ -113,7 +113,7 @@ type HealthConfig struct {
 	ClockSkewStaleMS    int64 `yaml:"clock_skew_stale_ms"    validate:"required,gt=0"`
 }
 
-// FallbackConfig is the fallback section. Parsed and validated; unread until M2.
+// FallbackConfig is the fallback section.
 type FallbackConfig struct {
 	Enabled            bool     `yaml:"enabled"`
 	MaxConcurrentPolls int      `yaml:"max_concurrent_polls" validate:"required,gte=1"`
@@ -122,7 +122,7 @@ type FallbackConfig struct {
 	MaxDuration        Duration `yaml:"max_duration"         validate:"required,gt=0"`
 }
 
-// SupervisorConfig is the supervisor section. Parsed and validated; unread until M2.
+// SupervisorConfig is the supervisor section.
 type SupervisorConfig struct {
 	StreamRestartBackoff   BackoffConfig        `yaml:"stream_restart_backoff"`
 	SocketReconnectBackoff BackoffConfig        `yaml:"socket_reconnect_backoff"`
@@ -157,7 +157,8 @@ type EndpointsConfig struct {
 	REST map[string]string `yaml:"rest" validate:"required,min=1"`
 }
 
-// RateLimitConfig is the rate_limit section. Parsed and validated; unread until M1.
+// RateLimitConfig is the rate_limit section. Parsed and validated; the rate
+// limiter that reads it is M3.
 type RateLimitConfig struct {
 	RESTWeightPerMinute int `yaml:"rest_weight_per_minute" validate:"required,gt=0"`
 	// MaxWeightFraction is the share of the venue's published budget to use.
@@ -168,12 +169,17 @@ type RateLimitConfig struct {
 	SubscriptionsPerConnection int     `yaml:"subscriptions_per_connection" validate:"required,gt=0"`
 }
 
-// ConnectionConfig is the connection section. Parsed and validated; unread until M1.
+// ConnectionConfig is the connection section.
 type ConnectionConfig struct {
 	MaxStreamsPerSocket int      `yaml:"max_streams_per_socket" validate:"required,gt=0"`
 	PingInterval        Duration `yaml:"ping_interval"          validate:"required,gt=0"`
 	PongTimeout         Duration `yaml:"pong_timeout"           validate:"required,gt=0"`
 	ReadTimeout         Duration `yaml:"read_timeout"           validate:"required,gt=0"`
+	// MaxAge is how old a connection may get before it is redialled on
+	// purpose. Venues drop long-lived sockets on a schedule of their own —
+	// Binance at 24 hours — and a planned redial is a clean handover where an
+	// unplanned one is a gap.
+	MaxAge Duration `yaml:"max_age" validate:"required,gt=0"`
 }
 
 // QuirksConfig is the quirks section: per-venue behaviour the adapter must honour.

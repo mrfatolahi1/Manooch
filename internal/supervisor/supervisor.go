@@ -52,6 +52,10 @@ type Options struct {
 	// LeakTimeout bounds the wait for a stopped goroutine to return.
 	LeakTimeout time.Duration
 
+	// ConnMaxAge is how old a connection may get before it is redialled on
+	// purpose. Zero disables the timer.
+	ConnMaxAge time.Duration
+
 	// ExpiryWindow is how long an expired key counts towards the quorum that
 	// escalates from restarting one stream to redialling the socket. Zero
 	// means defaultExpiryWindow.
@@ -280,9 +284,24 @@ func (s *socketRunner) session(ctx context.Context) string {
 
 	s.drainRedial()
 
+	// Venues drop long-lived sockets on a schedule of their own — Binance at
+	// twenty-four hours. Going first is the difference between a handover and
+	// a gap: we choose the moment, the streams stay inside their TTL across
+	// it, and nobody has to discover the disconnect by not being sent data.
+	var aged <-chan time.Time
+	if s.p.opts.ConnMaxAge > 0 {
+		timer := time.NewTimer(s.p.opts.ConnMaxAge)
+		defer timer.Stop()
+		aged = timer.C
+	}
+
 	var reason string
 	select {
 	case reason = <-reasons:
+	case <-aged:
+		reason = "planned reconnect at max age " + s.p.opts.ConnMaxAge.String()
+		s.p.opts.Log.Info("reconnecting before the venue disconnects us",
+			"socket", s.plan.ID, "max_age", s.p.opts.ConnMaxAge.String())
 	case <-s.redial:
 		reason = "streams expired together"
 	case <-sctx.Done():
