@@ -359,8 +359,11 @@ func (s *socketRunner) handleFrame(frame []byte, recvNs int64) {
 	}
 
 	// Recorded before publishing, so it is present even when Redis is refusing
-	// writes — which is exactly when it is worth reading.
-	s.p.observeSkew(msgs[0])
+	// writes — which is exactly when it is worth reading. Every message is
+	// offered: the first is not necessarily the one carrying a send time.
+	for _, m := range msgs {
+		s.p.observeSkew(m)
+	}
 
 	counted := make(map[pb.Channel]bool, len(msgs))
 	for _, m := range msgs {
@@ -605,9 +608,15 @@ func (p *Process) Leaked() int {
 // observeSkew records the venue's clock against ours. A venue clock ahead of
 // ours reads positive; the sign is kept because losing it hides which way the
 // two disagree.
+//
+// Only a timestamp the venue stamped as it sent the frame can be differenced
+// against arrival. An event time — KuCoin stamps a funding rate with the
+// settlement instant it describes, which is hours old by the time it is pushed
+// — would read as a four-hour clock skew and take a perfectly healthy venue to
+// STALE once a minute.
 func (p *Process) observeSkew(m core.Message) {
 	env := envelopeOf(m.Proto)
-	if env == nil || env.ExchangeTimeNs <= 0 || env.RecvTimeNs <= 0 {
+	if env == nil || !env.ExchangeTimeIsSendTime || env.ExchangeTimeNs <= 0 || env.RecvTimeNs <= 0 {
 		return
 	}
 	p.opts.Health.ClockSkew((env.ExchangeTimeNs - env.RecvTimeNs) / int64(time.Millisecond))

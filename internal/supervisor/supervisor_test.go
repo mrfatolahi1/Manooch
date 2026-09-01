@@ -540,3 +540,40 @@ func TestProactiveReconnectAtMaxAge(t *testing.T) {
 	second.Push([]byte("BTC_USDT"))
 	eventually(t, "the replacement socket to publish", func() bool { return h.pub.count(mark) > before })
 }
+
+// TestSkewIsOnlyMeasuredFromASendTime: a venue that stamps a value with the
+// instant it became effective, rather than the instant it sent it, is not
+// reporting a clock. KuCoin does exactly that on funding — the timestamp is the
+// settlement time, hours old on arrival — and differencing it against arrival
+// would take every stream on the venue to STALE once a minute.
+func TestSkewIsOnlyMeasuredFromASendTime(t *testing.T) {
+	h := newHarness(t)
+
+	// The frame carries one message: a funding rate stamped with a settlement
+	// four hours ago, exactly as KuCoin's funding.rate subject arrives.
+	const fourHours = 4 * time.Hour
+	h.adapter.ParseFunc = func(frame []byte, recvNs int64) ([]core.Message, error) {
+		funding := h.adapter.Message(h.specs[2], recvNs, pb.Source_SOURCE_WEBSOCKET)
+		env := funding.Proto.(interface{ GetEnv() *pb.Envelope }).GetEnv()
+		env.ExchangeTimeNs = recvNs - int64(fourHours)
+		env.ExchangeTimeIsSendTime = false
+		return []core.Message{funding}, nil
+	}
+	h.run(t)
+
+	conn := h.conn(t, 0)
+	conn.Push([]byte("BTC_USDT"))
+
+	k := key("BTC_USDT", pb.Channel_CHANNEL_FUNDING)
+	eventually(t, "the funding message to be published", func() bool { return h.pub.count(k) > 0 })
+
+	// The mark price is a send time and reports a skew of zero; the funding
+	// message is ignored for this purpose rather than overwriting it.
+	if st, reason := h.tracker.VenueStatus(); st != pb.Status_STATUS_HEALTHY {
+		t.Errorf("venue status = %s (%q); an event time was mistaken for a clock reading",
+			core.StatusName(st), reason)
+	}
+	if st, reason := h.tracker.Status(h.specs[2]); st != pb.Status_STATUS_HEALTHY {
+		t.Errorf("funding status = %s (%q), want HEALTHY", core.StatusName(st), reason)
+	}
+}

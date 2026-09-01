@@ -354,8 +354,14 @@ type Envelope struct {
 	SchemaVersion   uint32                 `protobuf:"varint,14,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
 	PriceExp        int32                  `protobuf:"varint,15,opt,name=price_exp,json=priceExp,proto3" json:"price_exp,omitempty"` // 0 => global -11
 	SizeExp         int32                  `protobuf:"varint,16,opt,name=size_exp,json=sizeExp,proto3" json:"size_exp,omitempty"`    // 0 => global -8
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// True when exchange_time_ns is the venue's clock at the moment it sent this,
+	// so it can be differenced against recv_time_ns to measure clock skew or
+	// latency. False when it is the instant the value became effective and may be
+	// hours in the past — KuCoin stamps a funding rate with its settlement time.
+	// Differencing that would report a four-hour clock skew on a healthy venue.
+	ExchangeTimeIsSendTime bool `protobuf:"varint,17,opt,name=exchange_time_is_send_time,json=exchangeTimeIsSendTime,proto3" json:"exchange_time_is_send_time,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *Envelope) Reset() {
@@ -498,6 +504,13 @@ func (x *Envelope) GetSizeExp() int32 {
 		return x.SizeExp
 	}
 	return 0
+}
+
+func (x *Envelope) GetExchangeTimeIsSendTime() bool {
+	if x != nil {
+		return x.ExchangeTimeIsSendTime
+	}
+	return false
 }
 
 type MarkPrice struct {
@@ -1025,7 +1038,7 @@ const file_manooch_proto_rawDesc = "" +
 	"marketType\x12\x16\n" +
 	"\x06expiry\x18\x05 \x01(\tR\x06expiry\x12\x1c\n" +
 	"\tcanonical\x18\x06 \x01(\tR\tcanonical\x12!\n" +
-	"\fvenue_symbol\x18\a \x01(\tR\vvenueSymbol\"\xe2\x04\n" +
+	"\fvenue_symbol\x18\a \x01(\tR\vvenueSymbol\"\x9e\x05\n" +
 	"\bEnvelope\x12\x14\n" +
 	"\x05venue\x18\x01 \x01(\tR\x05venue\x126\n" +
 	"\n" +
@@ -1048,7 +1061,8 @@ const file_manooch_proto_rawDesc = "" +
 	"\rstatus_reason\x18\r \x01(\tR\fstatusReason\x12%\n" +
 	"\x0eschema_version\x18\x0e \x01(\rR\rschemaVersion\x12\x1b\n" +
 	"\tprice_exp\x18\x0f \x01(\x05R\bpriceExp\x12\x19\n" +
-	"\bsize_exp\x18\x10 \x01(\x05R\asizeExp\"R\n" +
+	"\bsize_exp\x18\x10 \x01(\x05R\asizeExp\x12:\n" +
+	"\x1aexchange_time_is_send_time\x18\x11 \x01(\bR\x16exchangeTimeIsSendTime\"R\n" +
 	"\tMarkPrice\x12&\n" +
 	"\x03env\x18\x01 \x01(\v2\x14.manooch.v1.EnvelopeR\x03env\x12\x1d\n" +
 	"\n" +

@@ -8,6 +8,7 @@
       "payload": {
         "env": {
           "channel": "CHANNEL_MARK_PRICE",
+          "exchangeTimeIsSendTime": true,
           "exchangeTimeNs": "1562305380000000000",
           "instrument": {
             "base": "BTC",
@@ -32,6 +33,7 @@
       "payload": {
         "env": {
           "channel": "CHANNEL_INDEX_PRICE",
+          "exchangeTimeIsSendTime": true,
           "exchangeTimeNs": "1562305380000000000",
           "instrument": {
             "base": "BTC",

@@ -342,13 +342,17 @@ func (a *Adapter) Message(spec core.StreamSpec, recvNs int64, src pb.Source) cor
 	v, _ := price.ParsePrice("68432.15")
 
 	env := &pb.Envelope{
-		Venue:          Venue,
-		Instrument:     spec.Instrument.Proto(venueSymbol),
-		Channel:        spec.Channel,
-		ExchangeTimeNs: recvNs,
-		RecvTimeNs:     recvNs,
-		Source:         src,
-		Status:         pb.Status_STATUS_HEALTHY,
+		Venue:      Venue,
+		Instrument: spec.Instrument.Proto(venueSymbol),
+		Channel:    spec.Channel,
+		// The double stamps the arrival instant as the venue's, so the skew it
+		// reports is zero rather than absent: a test about reconnects should
+		// not have to reason about a clock as well.
+		ExchangeTimeNs:         recvNs,
+		RecvTimeNs:             recvNs,
+		ExchangeTimeIsSendTime: true,
+		Source:                 src,
+		Status:                 pb.Status_STATUS_HEALTHY,
 	}
 
 	var payload proto.Message

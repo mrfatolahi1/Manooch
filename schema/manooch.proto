@@ -80,6 +80,13 @@ message Envelope {
 
   int32      price_exp         = 15;  // 0 => global -11
   int32      size_exp          = 16;  // 0 => global -8
+
+  // True when exchange_time_ns is the venue's clock at the moment it sent this,
+  // so it can be differenced against recv_time_ns to measure clock skew or
+  // latency. False when it is the instant the value became effective and may be
+  // hours in the past — KuCoin stamps a funding rate with its settlement time.
+  // Differencing that would report a four-hour clock skew on a healthy venue.
+  bool       exchange_time_is_send_time = 17;
 }
 
 // ---------- payloads ----------

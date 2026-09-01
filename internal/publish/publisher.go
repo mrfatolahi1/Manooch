@@ -188,7 +188,12 @@ func (p *RedisPublisher) observe(env *pb.Envelope, publishTime time.Time) {
 
 	// A negative latency means our clock is behind the venue's: a skew signal,
 	// not a measurement, and averaging it in would hide both.
-	if env.ExchangeTimeNs > 0 {
+	//
+	// An exchange time that is an event time rather than a send time is not a
+	// latency at all: a funding rate carries the instant it settled, so the
+	// difference is how old the value is, and folding that into the histogram
+	// would put one venue's funding channel permanently in the last bucket.
+	if env.ExchangeTimeIsSendTime && env.ExchangeTimeNs > 0 {
 		if d := publishTime.UnixNano() - env.ExchangeTimeNs; d >= 0 {
 			p.opts.Metrics.PublishLatency.WithLabelValues(venue, channel).Observe(float64(d) / float64(time.Second))
 		}

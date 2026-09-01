@@ -203,11 +203,12 @@ func (a *Adapter) message(
 ) core.Message {
 	spec := core.StreamSpec{Instrument: ref, Channel: ch}
 	env := &pb.Envelope{
-		Venue:          Venue,
-		Instrument:     instrument,
-		Channel:        ch,
-		ExchangeTimeNs: exchangeNs,
-		RecvTimeNs:     recvNs,
+		Venue:                  Venue,
+		Instrument:             instrument,
+		Channel:                ch,
+		ExchangeTimeNs:         exchangeNs,
+		RecvTimeNs:             recvNs,
+		ExchangeTimeIsSendTime: exchangeTimeIsSendTime(ch),
 		// KuCoin's instrument topic carries no sequence number. Saying so is
 		// the point: an invented one would let a consumer believe it can
 		// detect venue-side gaps here, which it cannot.
@@ -233,6 +234,19 @@ func errorText(data []byte) string {
 		return string(data)
 	}
 	return s
+}
+
+// exchangeTimeIsSendTime reports whether this venue's timestamp on a channel is
+// the instant it sent the value.
+//
+// mark.index.price is stamped as it is pushed, so the difference against
+// arrival is a clock comparison. funding.rate is stamped with the settlement
+// instant it describes, which is hours old by the time it arrives — and the
+// REST endpoint answers the same way. Differencing that would report a
+// four-hour clock skew on a venue that is working perfectly, and take every
+// stream on it to STALE once a minute.
+func exchangeTimeIsSendTime(ch pb.Channel) bool {
+	return ch != pb.Channel_CHANNEL_FUNDING
 }
 
 // symbolOf splits "/contract/instrument:XBTUSDTM" into its symbol.

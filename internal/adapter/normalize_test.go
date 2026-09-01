@@ -247,6 +247,8 @@ func TestIdenticalInputNormalizesIdentically(t *testing.T) {
 				t.Errorf("specs differ: %v and %v", bm.Spec, km.Spec)
 			}
 
+			// Including exchange_time_is_send_time: both venues stamp mark and
+			// index as they push them, so both must say so.
 			if diff := comparePayloads(bm.Proto, km.Proto); diff != "" {
 				t.Errorf("normalized payloads differ beyond venue and venue_symbol: %s", diff)
 			}
@@ -254,10 +256,15 @@ func TestIdenticalInputNormalizesIdentically(t *testing.T) {
 	}
 }
 
-// TestFundingDiffersOnlyWhereTheVenuesDo: KuCoin's stream carries no next
-// funding time and Binance's does. That is a difference in what the venues
-// supply, not in how we normalize, and it is asserted here so that it stays the
-// only one — a derived value filling that gap would pass silently otherwise.
+// TestFundingDiffersOnlyWhereTheVenuesDo: two fields differ on funding, both
+// because the venues genuinely differ rather than because we normalize
+// differently.
+//
+// Binance stamps a funding message with the moment it sent it and includes the
+// next funding time; KuCoin stamps it with the settlement instant it describes
+// and includes no next funding time at all. Asserting exactly these two keeps
+// them the only ones: a derived next-funding-time, or a KuCoin timestamp
+// silently treated as a send time, would both pass unnoticed otherwise.
 func TestFundingDiffersOnlyWhereTheVenuesDo(t *testing.T) {
 	const rate = "-0.002966"
 
@@ -289,11 +296,23 @@ func TestFundingDiffersOnlyWhereTheVenuesDo(t *testing.T) {
 		t.Error("binance dropped next_funding_time_ns; the stream does carry one")
 	}
 
-	// With that one venue-supplied difference removed, everything else matches.
+	// The second difference: KuCoin's funding timestamp is the settlement
+	// instant, hours old by the time the frame arrives, so it must not be
+	// offered as a clock reading. Binance's is the moment it sent the frame.
+	if kf.Proto.(*pb.Funding).Env.ExchangeTimeIsSendTime {
+		t.Error("kucoin claims its funding timestamp is a send time; it is the settlement instant")
+	}
+	if !bf.Proto.(*pb.Funding).Env.ExchangeTimeIsSendTime {
+		t.Error("binance dropped exchange_time_is_send_time; its funding timestamp is the send time")
+	}
+
+	// With those two venue-supplied differences removed, everything else
+	// matches.
 	bClone := proto.Clone(bf.Proto).(*pb.Funding)
 	bClone.NextFundingTimeNs = 0
+	bClone.Env.ExchangeTimeIsSendTime = false
 	if diff := comparePayloads(bClone, kf.Proto); diff != "" {
-		t.Errorf("funding differs beyond next_funding_time_ns: %s", diff)
+		t.Errorf("funding differs beyond next_funding_time_ns and exchange_time_is_send_time: %s", diff)
 	}
 }
 

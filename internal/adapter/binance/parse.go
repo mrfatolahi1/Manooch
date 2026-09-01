@@ -169,6 +169,10 @@ func (a *Adapter) message(
 		Channel:        ch,
 		ExchangeTimeNs: exchangeNs,
 		RecvTimeNs:     recvNs,
+		// Binance stamps the mark price stream and the premiumIndex response
+		// with the instant it answered, so the difference against arrival is a
+		// clock comparison rather than the age of the value.
+		ExchangeTimeIsSendTime: true,
 		// Binance's mark price stream carries no sequence number. Saying so is
 		// the point: an invented one would let a consumer believe it can
 		// detect venue-side gaps here, which it cannot.
