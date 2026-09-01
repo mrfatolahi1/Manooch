@@ -31,13 +31,26 @@ connection:
 
 quirks:
   timestamp_unit: ms               # ms|us|ns|s
-  # Two subjects on one topic at two cadences: mark and index once a second,
-  # funding once a minute. ttl = cadence * health.ttl_multiplier, so funding
-  # gets 180s where mark and index get 3s. One number would expire the funding
-  # key between updates and report a healthy stream as dead.
+  # Two subjects on one topic at two very different cadences. ttl = cadence *
+  # health.ttl_multiplier, so funding gets 180s where mark and index get 30s.
+  # One number for the venue would expire the funding key between updates and
+  # report a healthy stream as dead.
+  #
+  # funding.rate is genuinely scheduled: measured at 59.6s between pushes.
+  #
+  # mark.index.price is not. The payload's granularity says 1000ms, but that is
+  # the granularity of the value, not a promise to send one: KuCoin pushes on
+  # change. Measured over two minutes on 2026-09-02, the mean gap was 1.7s on
+  # BTC and 2.2s on ETH, with worst gaps of 18.9s and 12.0s. A 1s cadence gives
+  # a 3s TTL, which expires between ordinary updates and puts both streams
+  # permanently on REST fallback while the socket is working perfectly. 10s
+  # covers the observed tail with room to spare.
+  #
+  # The cost is stated plainly: a genuine outage on this venue is noticed in 30
+  # seconds rather than 3. That is what the venue's own push behaviour allows.
   cadence:
-    mark_price:  1s
-    index_price: 1s
+    mark_price:  10s
+    index_price: 10s
     funding:     60s
 
 symbol_overrides:

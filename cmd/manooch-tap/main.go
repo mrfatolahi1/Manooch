@@ -165,9 +165,17 @@ func summarize(msg any) string {
 		return "index=" + price.Price(m.IndexPrice).String()
 
 	case *pb.Funding:
-		return fmt.Sprintf("rate=%s next=%s interval=%ds",
-			price.Rate(m.FundingRate), time.Unix(0, m.NextFundingTimeNs).UTC().Format(time.RFC3339),
-			m.IntervalSeconds)
+		// A zero next-funding time means the venue did not supply one, which is
+		// not the same as a funding settlement in 1970.
+		next := "-"
+		if m.NextFundingTimeNs > 0 {
+			next = time.Unix(0, m.NextFundingTimeNs).UTC().Format(time.RFC3339)
+		}
+		interval := "-"
+		if m.IntervalSeconds > 0 {
+			interval = fmt.Sprintf("%ds", m.IntervalSeconds)
+		}
+		return fmt.Sprintf("rate=%s next=%s interval=%s", price.Rate(m.FundingRate), next, interval)
 
 	case *pb.InstrumentMeta:
 		return fmt.Sprintf("tick=%s lot=%s min=%s active=%v",
