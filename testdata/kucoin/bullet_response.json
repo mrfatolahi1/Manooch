@@ -1,0 +1,15 @@
+{
+  "code": "200000",
+  "data": {
+    "token": "2neAiuYvAU61ZDXANAGAsiL4-iAExhsBXZxftpOeh_55i3Ysy2q2LEsEWU64mdzUOPusi34M_wGoSf7iNyEWJx0HW2QaAclOA2C-8ecs8LlBLh8fzKmS7XinBBrHR2Vg8yqfF3zbg2eNXHLQrM0YSg==.o0AhZg_5FdcAmg8lJVEUPQ==",
+    "instanceServers": [
+      {
+        "endpoint": "wss://ws-api-futures.kucoin.com/",
+        "encrypt": true,
+        "protocol": "websocket",
+        "pingInterval": 18000,
+        "pingTimeout": 10000
+      }
+    ]
+  }
+}
