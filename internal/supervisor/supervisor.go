@@ -26,6 +26,16 @@ const parseErrLogInterval = time.Second
 // sequence are seen together, short enough that yesterday's outage does not.
 const defaultExpiryWindow = 10 * time.Second
 
+// defaultConnectGrace is how long after a connection comes up an expired key is
+// still attributed to the outage before it rather than to the new connection.
+//
+// It has to cover two things: the first message on each stream arriving, and
+// Redis finishing its reports of the keys that lapsed while the socket was
+// down — it reports an expiry when it reclaims the key, which is after the
+// reconnect, not when the TTL ran out. Five seconds covers both on every
+// channel in scope.
+const defaultConnectGrace = 5 * time.Second
+
 // Options configures a Process.
 type Options struct {
 	// Venue is the canonical upper-case venue name.
@@ -60,6 +70,11 @@ type Options struct {
 	// escalates from restarting one stream to redialling the socket. Zero
 	// means defaultExpiryWindow.
 	ExpiryWindow time.Duration
+
+	// ConnectGrace is how long after a socket connects an expired key is
+	// attributed to the outage before it rather than to the new connection.
+	// Zero means defaultConnectGrace.
+	ConnectGrace time.Duration
 
 	// OnMessage is called for each stream a websocket message arrives on,
 	// before it is published. The fallback watcher disengages through it.
@@ -109,6 +124,9 @@ func New(opts Options) (*Process, error) {
 	}
 	if opts.ExpiryWindow <= 0 {
 		opts.ExpiryWindow = defaultExpiryWindow
+	}
+	if opts.ConnectGrace <= 0 {
+		opts.ConnectGrace = defaultConnectGrace
 	}
 
 	p := &Process{opts: opts, now: opts.Now, byStream: map[core.StreamSpec]*socketRunner{}}
@@ -169,9 +187,12 @@ type socketRunner struct {
 	// replaced, and the old goroutine abandoned.
 	redial chan struct{}
 
-	mu        sync.Mutex
-	conn      core.Conn
-	expiredAt map[core.StreamSpec]time.Time
+	mu   sync.Mutex
+	conn core.Conn
+	// connectedAt is when the current connection came up, for the grace period
+	// in noteExpiry.
+	connectedAt time.Time
+	expiredAt   map[core.StreamSpec]time.Time
 }
 
 func newSocketRunner(p *Process, plan core.SocketPlan) *socketRunner {
@@ -381,9 +402,30 @@ func (s *socketRunner) handleFrame(frame []byte, recvNs int64) {
 }
 
 // noteExpiry records one expired key and decides which tier it is.
+//
+// Two things do not count, because neither is evidence against this socket:
+//
+// An expiry while the socket has no live connection. It is already dialing or
+// backing off, and every key it feeds will expire until it comes back;
+// redialling mid-dial only makes the outage longer, and at startup it aborts
+// the very first connection attempt before a single key has been written.
+//
+// An expiry inside the grace period after a connection came up. Those keys went
+// stale during the outage that preceded it — Redis reports an expiry when it
+// reclaims the key, which is after the reconnect, not when the TTL lapsed — so
+// counting them redials the socket that has just fixed the problem. On a venue
+// whose dial takes longer than the mark price TTL, that is a loop with no exit:
+// reconnect, keys expire, redial.
+//
+// What is left is what the escalation is for: a socket that is connected, has
+// been for a while, and is delivering for nobody.
 func (s *socketRunner) noteExpiry(spec core.StreamSpec) {
 	s.mu.Lock()
 	now := s.p.now()
+	if s.conn == nil || now.Sub(s.connectedAt) < s.p.opts.ConnectGrace {
+		s.mu.Unlock()
+		return
+	}
 	s.expiredAt[spec] = now
 	n := 0
 	for k, at := range s.expiredAt {
@@ -418,10 +460,15 @@ func (s *socketRunner) noteExpiry(spec core.StreamSpec) {
 	}
 }
 
+// setConn adopts a new connection. The expiries recorded against the previous
+// one are dropped with it: they were explained by the outage this connection
+// just ended.
 func (s *socketRunner) setConn(c core.Conn) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.conn = c
+	s.connectedAt = s.p.now()
+	clear(s.expiredAt)
 }
 
 func (s *socketRunner) currentConn() core.Conn {
@@ -436,6 +483,7 @@ func (s *socketRunner) closeConn() {
 	s.mu.Lock()
 	c := s.conn
 	s.conn = nil
+	s.connectedAt = time.Time{}
 	s.mu.Unlock()
 
 	if c != nil {

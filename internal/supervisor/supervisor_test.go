@@ -159,6 +159,11 @@ func newHarness(t *testing.T, symbols ...string) *harness {
 		Breaker:       transport.BreakerOptions{ConsecutiveFailures: 10, OpenDuration: time.Hour},
 		LeakTimeout:   leakTimeout,
 		ExpiryWindow:  time.Minute,
+		// The grace after a connect is what stops a reconnect's own expiry
+		// burst from redialling again; these tests expire keys deliberately,
+		// after a publish has already proved the socket up, so it is set out of
+		// the way rather than waited through.
+		ConnectGrace: time.Millisecond,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -187,7 +192,12 @@ func (h *harness) withMaxAge(t *testing.T, d time.Duration) {
 		Breaker:       transport.BreakerOptions{ConsecutiveFailures: 10, OpenDuration: time.Hour},
 		LeakTimeout:   leakTimeout,
 		ExpiryWindow:  time.Minute,
-		ConnMaxAge:    d,
+		// The grace after a connect is what stops a reconnect's own expiry
+		// burst from redialling again; these tests expire keys deliberately,
+		// after a publish has already proved the socket up, so it is set out of
+		// the way rather than waited through.
+		ConnectGrace: time.Millisecond,
+		ConnMaxAge:   d,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -576,4 +586,63 @@ func TestSkewIsOnlyMeasuredFromASendTime(t *testing.T) {
 	if st, reason := h.tracker.Status(h.specs[2]); st != pb.Status_STATUS_HEALTHY {
 		t.Errorf("funding status = %s (%q), want HEALTHY", core.StatusName(st), reason)
 	}
+}
+
+// TestReconnectDoesNotRedialItself: the keys a socket feeds go stale while it
+// is down, and Redis reports them when it reclaims them — after the reconnect,
+// not when the TTL ran out. Counting those against the connection that has just
+// fixed the problem is a loop with no exit on any venue whose dial takes longer
+// than the shortest TTL, which is every venue that bootstraps over REST.
+func TestReconnectDoesNotRedialItself(t *testing.T) {
+	h := newHarness(t)
+	h.proc = nil // rebuilt below with the real grace period
+
+	specs, err := coretest.Specs("BTC_USDT")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plans, err := h.adapter.PlanSubscriptions(specs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.proc, err = supervisor.New(supervisor.Options{
+		Venue:         coretest.Venue,
+		Adapter:       h.adapter,
+		Plans:         plans,
+		Publisher:     h.pub,
+		Health:        h.tracker,
+		Metrics:       h.metrics,
+		Log:           quiet(),
+		StreamBackoff: fastBackoff(),
+		SocketBackoff: fastBackoff(),
+		Breaker:       transport.BreakerOptions{ConsecutiveFailures: 10, OpenDuration: time.Hour},
+		LeakTimeout:   leakTimeout,
+		ExpiryWindow:  time.Minute,
+		ConnectGrace:  2 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.run(t)
+
+	first := h.conn(t, 0)
+	mark := key("BTC_USDT", pb.Channel_CHANNEL_MARK_PRICE)
+	first.Push([]byte("BTC_USDT"))
+	eventually(t, "first publish", func() bool { return h.pub.count(mark) > 0 })
+
+	// Every key on the socket expires at once, which is exactly the burst a
+	// reconnect produces. Inside the grace it must change nothing.
+	for _, spec := range h.specs {
+		h.proc.KeyExpired(spec)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+	if first.IsClosed() {
+		t.Error("the socket was redialled by the expiries its own reconnect caused")
+	}
+
+	// And it is still delivering on the same connection.
+	before := h.pub.count(mark)
+	first.Push([]byte("BTC_USDT"))
+	eventually(t, "the socket to keep publishing", func() bool { return h.pub.count(mark) > before })
 }
