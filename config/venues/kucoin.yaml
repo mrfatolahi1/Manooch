@@ -1,0 +1,51 @@
+venue: KUCOIN
+enabled: true
+
+endpoints:
+  ws:
+    # The bullet host, not a socket address. KuCoin does not let you dial the
+    # socket directly: POST /api/v1/bullet-public answers with the address, a
+    # token and the ping contract, and every reconnect asks again.
+    PERP_LINEAR: "https://api-futures.kucoin.com"
+  rest:
+    PERP_LINEAR: "https://api-futures.kucoin.com"
+
+rate_limit:
+  # KuCoin's public futures pool is 2000 weight per 30 seconds per IP.
+  rest_weight_per_minute: 4000
+  max_weight_fraction: 0.5
+  ws_connect_per_5min: 150
+  ws_connect_fraction: 0.5
+  subscriptions_per_connection: 100
+
+connection:
+  max_streams_per_socket: 50
+  # The venue's own ping contract comes from the bullet response and overrides
+  # these; they are the shape every venue file has, not what KuCoin is told.
+  ping_interval: 18s
+  pong_timeout: 10s
+  read_timeout: 60s
+  # KuCoin publishes no maximum socket age. Redialling daily is a handover we
+  # choose the moment of rather than one the venue chooses for us.
+  max_age: 23h
+
+quirks:
+  timestamp_unit: ms               # ms|us|ns|s
+  # Two subjects on one topic at two cadences: mark and index once a second,
+  # funding once a minute. ttl = cadence * health.ttl_multiplier, so funding
+  # gets 180s where mark and index get 3s. One number would expire the funding
+  # key between updates and report a healthy stream as dead.
+  cadence:
+    mark_price:  1s
+    index_price: 1s
+    funding:     60s
+
+symbol_overrides:
+  # KuCoin spells bitcoin XBT. The rule is {BASE}{QUOTE}M; this is where the
+  # exception is stated exactly rather than guessed at from an alias table.
+  BTC_USDT: XBTUSDTM
+
+instruments:
+  - market_type: PERP_LINEAR
+    channels: [mark_price, index_price, funding]
+    symbols: [BTC_USDT, ETH_USDT]

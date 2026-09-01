@@ -256,7 +256,12 @@ func (c *Config) validateEndpoints(p *provenance) []error {
 			}
 		}
 	}
-	check("ws", c.Endpoints.WS, "ws", "wss")
+	// endpoints.ws accepts an https base as well as a wss one. Not every venue
+	// lets you dial the socket directly: KuCoin hands out the address over a
+	// public REST call, so what belongs here is where to ask rather than where
+	// to connect. Rejecting https would have forced that URL into a key the
+	// adapter does not read, which is a config file that lies.
+	check("ws", c.Endpoints.WS, "ws", "wss", "http", "https")
 	check("rest", c.Endpoints.REST, "http", "https")
 	return errs
 }

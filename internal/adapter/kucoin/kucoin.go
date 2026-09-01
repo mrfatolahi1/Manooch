@@ -109,6 +109,8 @@ type Adapter struct {
 	reverse map[string]string
 }
 
+var _ core.Adapter = (*Adapter)(nil)
+
 // New builds the adapter. It opens nothing and fetches no token.
 func New(opts Options) (*Adapter, error) {
 	if opts.WSEndpoint == "" {

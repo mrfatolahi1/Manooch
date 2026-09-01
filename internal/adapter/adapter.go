@@ -9,6 +9,7 @@ import (
 	"slices"
 
 	"github.com/you/manooch/internal/adapter/binance"
+	"github.com/you/manooch/internal/adapter/kucoin"
 	"github.com/you/manooch/internal/config"
 	"github.com/you/manooch/internal/core"
 	"github.com/you/manooch/internal/ratelimit"
@@ -28,6 +29,7 @@ type Deps struct {
 // config itself — it is handed resolved values — so the translation lives here.
 var builders = map[string]func(*config.Config, Deps) (core.Adapter, error){
 	binance.Venue: newBinance,
+	kucoin.Venue:  newKuCoin,
 }
 
 // Venues lists the venues this build serves, sorted, for error messages.
@@ -62,6 +64,24 @@ func Specs(cfg *config.Config) ([]core.StreamSpec, error) {
 		specs = append(specs, core.StreamSpec{Instrument: ref, Channel: s.Channel})
 	}
 	return specs, nil
+}
+
+// newKuCoin builds the KuCoin adapter.
+//
+// endpoints.ws holds the bullet host rather than a socket address: KuCoin does
+// not let you dial the socket directly, and the address is only knowable once
+// the bullet call has answered. See adapter-kucoin.md.
+func newKuCoin(cfg *config.Config, deps Deps) (core.Adapter, error) {
+	mt := core.MarketTypeName(kucoin.MarketType)
+	return kucoin.New(kucoin.Options{
+		WSEndpoint:          cfg.Endpoints.WS[mt],
+		RESTEndpoint:        cfg.Endpoints.REST[mt],
+		SymbolOverrides:     cfg.SymbolOverrides,
+		MaxStreamsPerSocket: cfg.Connection.MaxStreamsPerSocket,
+		ReadTimeout:         cfg.Connection.ReadTimeout.Std(),
+		TTLs:                cfg.TTLs(),
+		Limiter:             deps.Limiter,
+	})
 }
 
 func newBinance(cfg *config.Config, deps Deps) (core.Adapter, error) {

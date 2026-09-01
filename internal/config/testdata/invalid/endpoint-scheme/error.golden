@@ -1,1 +1,1 @@
-<config>/venues/binance.yaml: endpoints.ws.PERP_LINEAR: scheme "https" must be one of ws, wss
+<config>/venues/binance.yaml: endpoints.ws.PERP_LINEAR: scheme "ftp" must be one of ws, wss, http, https
