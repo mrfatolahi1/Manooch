@@ -371,8 +371,15 @@ func (t *Tracker) FallbackDisengaged(spec core.StreamSpec) {
 // streams: publishing a price with unknown precision is publishing a number
 // nobody can size an order from.
 //
+// It does nothing at all when the venue file did not make metadata a startup
+// requirement. Metadata is a gate or it is not, and a venue that opted out must
+// not be taken STALE by a refresh that happens to be failing.
+//
 // reason is ignored when ok is true.
 func (t *Tracker) MetadataState(ok bool, reason string) {
+	if !t.opts.MetadataRequired {
+		return
+	}
 	t.update(func() []*instrument {
 		if t.metadataOK == ok && (ok || t.metadataReason == reason) {
 			return nil

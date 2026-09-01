@@ -49,7 +49,9 @@ stale: a leak is a connection-level fact, not a wrong number.
 `metadata.startup_required: true` it is where every stream starts. Nothing is
 published while it holds — no socket is even dialled — because a price at
 unknown precision is a number a consumer would size an order from and get
-wrong. See [`metadata.md`](metadata.md).
+wrong. With the flag off, `MetadataState` does nothing at all: metadata is a
+gate or it is not, and a venue that opted out must not be taken `STALE` by a
+refresh failing in the background. See [`metadata.md`](metadata.md).
 
 ## Key types and functions
 
@@ -69,7 +71,7 @@ wrong. See [`metadata.md`](metadata.md).
 | `Tracker.FallbackEngaged/Failed/Disengaged(spec, …)` | Fallback lifecycle |
 | `Tracker.SocketState(id, state, reason)` | `SocketConnected`, `SocketDialing`, `SocketCircuitOpen` |
 | `Tracker.Reconnected(id)` | Counts one completed reconnection |
-| `Tracker.MetadataState(ok, reason)` | Whether the venue's instrument metadata has arrived |
+| `Tracker.MetadataState(ok, reason)` | Whether the venue's instrument metadata has arrived; a no-op unless `MetadataRequired` |
 | `Tracker.ClockSkew(ms)` | Signed: a venue clock ahead of ours is positive |
 | `Tracker.Leaked(n)` | Goroutines that never came back |
 

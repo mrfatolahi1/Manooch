@@ -365,3 +365,19 @@ func TestMetadataNotRequiredIsHealthyFromTheStart(t *testing.T) {
 	tr.Received(spec)
 	wantStatus(t, tr, spec, pb.Status_STATUS_HEALTHY, "")
 }
+
+// TestMetadataStateIsIgnoredWhenNotRequired: metadata is a gate or it is not.
+// A venue file that opted out must not have its streams taken STALE by a
+// refresh that happens to be failing in the background.
+func TestMetadataStateIsIgnoredWhenNotRequired(t *testing.T) {
+	c, pub := newClock(), &recorder{}
+	tr := newTracker(t, c, pub) // MetadataRequired is false here
+	spec := specs(t)[0]
+	tr.Received(spec)
+
+	tr.MetadataState(false, "metadata unavailable")
+	wantStatus(t, tr, spec, pb.Status_STATUS_HEALTHY, "")
+	if status, _ := tr.VenueStatus(); status != pb.Status_STATUS_HEALTHY {
+		t.Errorf("venue status = %s, want HEALTHY", core.StatusName(status))
+	}
+}
