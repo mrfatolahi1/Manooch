@@ -9,7 +9,10 @@ Start with [`architecture.md`](architecture.md): the shape, the dependency rule,
 | [`core.md`](core.md) | `internal/core` — instrument identity, enum mapping |
 | [`adapter.md`](adapter.md) | `internal/core/adapter.go`, `internal/adapter/` — the inbound port |
 | [`adapter-binance.md`](adapter-binance.md) | `internal/adapter/binance` — endpoint, payload mapping, quirks |
-| [`transport.md`](transport.md) | `internal/transport` — websocket connections, where `recv_time_ns` is stamped |
+| [`transport.md`](transport.md) | `internal/transport` — websocket connections, backoff, circuit breaker |
+| [`supervisor.md`](supervisor.md) | `internal/supervisor` — the restart procedure and the escalation tiers |
+| [`health.md`](health.md) | `internal/health` — status semantics, TTL as freshness, the heartbeat |
+| [`fallback.md`](fallback.md) | `internal/fallback` — expiry trigger, REST polling, escalation to `STALE` |
 | [`publish.md`](publish.md) | `internal/publish` — key scheme and the write path |
 | [`obs.md`](obs.md) | `internal/obs` — logger and collectors |
 | [`synth.md`](synth.md) | `internal/synth` — dev-only generator, removed at M4 |
@@ -18,4 +21,4 @@ Start with [`architecture.md`](architecture.md): the shape, the dependency rule,
 
 Building and running: the repository [`README.md`](../README.md). Per-symbol detail: `go doc ./internal/<pkg>` — every exported symbol has a doc comment.
 
-`internal/fallback/` and `internal/metadata/` are empty; `architecture.md` says what each is reserved for.
+`internal/metadata/` is empty; `architecture.md` says what it is reserved for.

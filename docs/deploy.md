@@ -16,7 +16,7 @@ Covers: M1 · `deploy/`, `Makefile`, `go.mod`, `.dockerignore`, `.gitignore`
 | `appendonly` / `save` | `no` / `""` | Data is ephemeral; the cache rebuilds within one cadence |
 | `maxmemory` | `2gb` | |
 | `maxmemory-policy` | `noeviction` | **Critical.** Any eviction policy silently deletes last-value keys under pressure, and a missing key is how a stale stream is reported — a working stream would read as expired. `noeviction` returns a write error instead |
-| `notify-keyspace-events` | `Ex` | Expired-key events; the M2 fallback triggers on them |
+| `notify-keyspace-events` | `Ex` | Expired-key events; `internal/fallback` triggers on them |
 | `client-output-buffer-limit pubsub` | `256mb 64mb 60` | A subscriber that falls behind is dropped by Redis with no notice to either side. Raising the limit makes that rarer, not impossible — consumers still watch `publish_seq` |
 
 ## Allowed dependencies

@@ -1,4 +1,4 @@
-Covers: M1 · `internal/adapter/binance`
+Covers: M2 · `internal/adapter/binance`
 
 Binance USD-M futures over public unauthenticated websockets. Perpetual linear
 only. **No credential, no signature, no authenticated stream, no order path.**
@@ -71,7 +71,7 @@ being true for every symbol.
 | Dated contracts share the endpoint | A symbol containing `_` (`BTCUSDT_240329`) is rejected. Its price is not a perpetual's. |
 | Empty funding rate | `r: ""` skips the funding message and still emits mark and index. Zero is a real rate; empty is missing data. |
 | Server-initiated pings | `coder/websocket` answers them. Verified, not assumed — `transport.Conn.ServerPings` counts them and two tests check it. |
-| 24-hour disconnect | Binance drops long-lived sockets. This build logs at ERROR and exits; M2 reconnects before the limit. |
+| 24-hour disconnect | Binance drops long-lived sockets. `connection.max_age` (23h) redials first, so the handover is one we chose the moment of. |
 | Three channels, one stream | `PlanSubscriptions` deduplicates by venue stream — subscribing per channel would spend three slots and deliver each frame three times. |
 
 ## REST fallback
@@ -80,7 +80,7 @@ being true for every symbol.
 different names. `FetchOnce` returns **only the requested channel**: a caller
 polling because one key expired asked for that key, not to have two others
 overwritten from a source it did not choose. Messages are `SOURCE_REST`.
-Declared and tested; M2 wires it into the fallback path.
+`internal/fallback` calls it on every expired key; see `fallback.md`.
 
 ## Rules
 

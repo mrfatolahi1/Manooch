@@ -1,4 +1,4 @@
-Covers: M1 · `internal/config`, `config/`
+Covers: M2 · `internal/config`, `config/`
 
 Loads `defaults.yaml` and one venue file, merges them, and returns a validated `Config` or an error naming the offending key and its file.
 
@@ -47,7 +47,8 @@ there is no TTL, and a key with no TTL cannot say whether it is fresh.
 
 ## Very important details
 
-- **Much of the config is not read yet.** `fallback`, `supervisor`, `metadata` and `rate_limit` parse and validate, then nothing reads them. `venue.enabled` is only logged — setting it `false` does **not** stop the feed. `endpoints`, `connection.max_streams_per_socket` and `connection.read_timeout` are read by the adapter; `connection.ping_interval` and `pong_timeout` are not.
+- **`connection.max_age` is required.** It is what redials before a venue drops a long-lived socket; leaving it optional would make a missing key mean "never reconnect proactively", which is a gap nobody chose.
+- **Some of the config is still not read.** `metadata` and `rate_limit` parse and validate, then nothing reads them; `connection.ping_interval` and `pong_timeout` are not read either. `venue.enabled` is only logged — setting it `false` does **not** stop the feed.
 - **`validateHTTP` returns early when `service.http.enabled` is false**, so a non-loopback `listen` is only rejected when a server would actually start.
 
 ## Rules

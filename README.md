@@ -10,10 +10,13 @@ downstream consumers. One process serves one venue.
 
 It mainly uses WebSockets to receive data, with REST API fallback and resubscription mechanism for unhealthy WebSockets. Manooch tries to ensure that fresh data is always available in Redis.
 
-**Milestone M1.** Real data from Binance USD-M futures: mark price, index price
-and funding, three Redis keys per symbol. The scope is now perpetual mark price
-only — order books and trades are gone for good. The feed does not yet
-reconnect: a dropped socket logs at ERROR and exits.
+**Milestone M2.** Real data from Binance USD-M futures: mark price, index price
+and funding, three Redis keys per symbol. The scope is perpetual mark price
+only — order books and trades are gone for good. The feed now supervises itself:
+a dropped socket redials with jittered backoff behind a circuit breaker, a
+failed stream restarts on its own, an expired key is served over REST and
+labelled as such, and every stream's health is published on a heartbeat so
+silence is never ambiguous.
 
 No credentials, public endpoints only.
 

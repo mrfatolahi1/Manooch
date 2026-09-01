@@ -1,4 +1,4 @@
-Covers: M1 · `internal/core/adapter.go`, `internal/adapter/`
+Covers: M2 · `internal/core/adapter.go`, `internal/adapter/`
 
 The inbound port. One implementation per venue, and the only place a venue's
 habits are allowed to exist. Everything downstream of `Parse` is venue-agnostic.
@@ -30,9 +30,10 @@ habits are allowed to exist. Everything downstream of `Parse` is venue-agnostic.
 ## How it is used
 
 `cmd/manooch-feed` calls `adapter.New` → `adapter.Specs` → `PlanSubscriptions`
-before it dials Redis or binds a port, then one goroutine per plan runs
-`Dial` → `Read` → `Parse` → `Publish`. `FetchOnce`, `FetchMetadata` and
-`RESTCost` are declared and unused by the daemon; M2 and M3 call them.
+before it dials Redis or binds a port, then hands the plans to
+`internal/supervisor`, which owns `Dial`, `Read` and `Parse`.
+`internal/fallback` calls `FetchOnce` on every expired key. `FetchMetadata` and
+`RESTCost` are declared and unused by the daemon; M3 calls them.
 
 `Parse` returns `(nil, nil)` for acks, pongs and heartbeats. That is normal
 traffic, not a failure, and counting it as one would show parse errors climbing
@@ -41,8 +42,8 @@ on a healthy socket.
 ## Rules
 
 - **Adapters hold no stream lifecycle state.** No reconnect counters, no
-  last-seen timestamps, no goroutines. The caller owns all of it, which is what
-  lets M2 change how streams are supervised without touching a venue package.
+  last-seen timestamps, no goroutines. `internal/supervisor` owns all of it,
+  which is what let supervision be added in M2 without touching a venue package.
 - **`Parse` is pure and deterministic given `(frame, recvNs)`.** No clock read,
   no map iteration, no counter. Fixture replay tests nothing otherwise, and a
   message that differs between identical frames cannot be reasoned about.
@@ -78,5 +79,6 @@ on a healthy socket.
 
 ## Not here
 
-Reconnect policy, backoff, circuit breaking, the stream supervisor, TTL-driven
-health transitions, REST fallback activation, rate limiting, metadata refresh.
+Reconnect policy and backoff (`transport.md`), the restart tiers
+(`supervisor.md`), status computation (`health.md`), fallback activation
+(`fallback.md`), rate limiting, metadata refresh.

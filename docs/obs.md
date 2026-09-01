@@ -1,4 +1,4 @@
-Covers: M1 · `internal/obs`
+Covers: M2 · `internal/obs`
 
 The process logger and the full Prometheus collector set, on a private registry.
 
@@ -14,9 +14,10 @@ All 17 collectors are declared up front, including those that stay at zero until
 | Collector | Written by |
 |---|---|
 | `messages_published_total`, `publish_latency_seconds`, `internal_latency_seconds`, `redis_publish_errors_total` | `internal/publish` |
-| `ws_frames_received_total`, `clock_skew_ms`, `parse_errors_total`, `range_errors_total` | `cmd/manooch-feed`'s read loop |
-| `leaked_goroutines` | `cmd/manooch-feed` on a shutdown past its deadline |
-| `stream_status`, `key_expired_total`, `reconnects_total`, `stream_restarts_total`, `rate_limit_*`, `fallback_*` | nothing yet — M2 and M3 |
+| `ws_frames_received_total`, `parse_errors_total`, `range_errors_total` | `internal/supervisor`'s read loop |
+| `stream_status`, `clock_skew_ms`, `key_expired_total`, `reconnects_total`, `stream_restarts_total`, `leaked_goroutines`, `fallback_active` | `internal/health`, from the state it already tracks |
+| `fallback_polls_total` | `internal/fallback`, labelled `ok`, `error`, `empty` or `capacity` |
+| `rate_limit_used`, `rate_limit_denied_total` | nothing yet — M3 |
 
 `ws_frames_received_total` is counted once per **distinct channel** a frame produced messages on, so one Binance markPrice frame increments `mark_price`, `index_price` and `funding`. The label set is per stream, and per-stream liveness is what the counter is read for; a socket-wide total would hide one channel going quiet. Acks and pongs produce no messages and increment nothing.
 
