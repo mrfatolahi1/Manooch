@@ -220,5 +220,14 @@ func (p *RedisPublisher) onWriteError(key string, err error) {
 	}
 }
 
+// Redis exposes the underlying client for the reads the write path does not
+// do: the fallback watcher's keyspace subscription and its pipelined EXISTS
+// sweep.
+//
+// It is deliberately not a way to write. Everything published goes through
+// Publish, which is the only place the envelope is stamped and the only place
+// publish_time_ns is set.
+func (p *RedisPublisher) Redis() *redis.Client { return p.rdb }
+
 // Close releases the connection pool.
 func (p *RedisPublisher) Close() error { return p.rdb.Close() }
