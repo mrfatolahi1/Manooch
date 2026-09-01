@@ -3,6 +3,10 @@
 // It reads; it never subscribes. The last-value cache is the state of the
 // world, so one pass over the keys is the whole picture, and a stream whose key
 // has expired simply is not there.
+//
+// The health keys are read alongside the data keys, which is where the restart
+// count comes from and what the venue row is: socket state, clock skew and
+// leaked goroutines belong to the connection rather than to any one stream.
 package main
 
 import (
@@ -109,12 +113,24 @@ type row struct {
 	ttl        time.Duration
 	ttlText    string
 	publishSeq uint64
-	note       string
+	restarts   uint32
+	reason     string
+
+	// venueScoped marks Manooch:{VENUE}:venue:health, the connection-level row.
+	venueScoped bool
+	// health is set on any row carrying a Health payload, which is what the
+	// restart counts are attached from.
+	health *pb.Health
 }
 
 func (r row) less(o row) bool {
 	if r.venue != o.venue {
 		return r.venue < o.venue
+	}
+	// The connection-level row first: everything under it is conditional on
+	// the socket being up, so reading it second is reading it backwards.
+	if r.venueScoped != o.venueScoped {
+		return r.venueScoped
 	}
 	if r.marketType != o.marketType {
 		return r.marketType < o.marketType
@@ -145,11 +161,12 @@ func readRows(ctx context.Context, rdb *redis.Client, keys []string) ([]row, err
 
 		parts, err := publish.ParseKey(k)
 		if err != nil {
-			r.note = "unparseable key"
+			r.reason = "unparseable key"
 			rows = append(rows, r)
 			continue
 		}
 		r.venue = parts.Venue
+		r.venueScoped = parts.VenueScoped
 		if parts.VenueScoped {
 			r.marketType, r.channel = publish.VenueScope, parts.Subject
 		} else {
@@ -172,7 +189,7 @@ func readRows(ctx context.Context, rdb *redis.Client, keys []string) ([]row, err
 
 		payload, err := gets[i].Bytes()
 		if err != nil {
-			r.note = "expired between scan and read"
+			r.reason = "expired between scan and read"
 			rows = append(rows, r)
 			continue
 		}
@@ -180,16 +197,16 @@ func readRows(ctx context.Context, rdb *redis.Client, keys []string) ([]row, err
 		ch := parts.Channel
 		if parts.VenueScoped {
 			if parts.Subject != publish.SubjectHealth {
-				r.note = fmt.Sprintf("%d bytes", len(payload))
+				r.reason = fmt.Sprintf("%d bytes", len(payload))
 				rows = append(rows, r)
 				continue
 			}
 			ch = pb.Channel_CHANNEL_HEALTH
 		}
 
-		_, env, err := publish.Decode(ch, payload)
+		msg, env, err := publish.Decode(ch, payload)
 		if err != nil {
-			r.note = "decode: " + err.Error()
+			r.reason = "decode: " + err.Error()
 			rows = append(rows, r)
 			continue
 		}
@@ -198,23 +215,75 @@ func readRows(ctx context.Context, rdb *redis.Client, keys []string) ([]row, err
 		r.age = now.Sub(time.Unix(0, env.PublishTimeNs))
 		r.source = core.SourceName(env.Source)
 		r.publishSeq = env.PublishSeq
+		r.reason = env.StatusReason
+		if h, ok := msg.(*pb.Health); ok {
+			r.health = h
+			r.restarts = h.StreamRestartCount
+		}
 		rows = append(rows, r)
 	}
+
+	attachHealth(rows)
 	return rows, nil
+}
+
+// attachHealth copies each instrument's restart count onto its data rows, and
+// spells the connection-level numbers out on the venue row.
+//
+// The restart count is per instrument, not per channel: the health key is one
+// per instrument, and a channel's own status and reason already ride inside its
+// data key. What the column answers is "has this instrument been churning",
+// which is the question worth asking from a table.
+func attachHealth(rows []row) {
+	restarts := map[string]uint32{}
+	for _, r := range rows {
+		if r.health != nil && !r.venueScoped {
+			restarts[r.venue+"|"+r.marketType+"|"+r.symbol] = r.restarts
+		}
+	}
+
+	for i := range rows {
+		r := &rows[i]
+		if r.venueScoped {
+			r.reason = venueReason(r)
+			continue
+		}
+		if r.health == nil {
+			r.restarts = restarts[r.venue+"|"+r.marketType+"|"+r.symbol]
+		}
+	}
+}
+
+// venueReason spells out what only the connection-level row knows.
+func venueReason(r *row) string {
+	if r.health == nil {
+		return r.reason
+	}
+	parts := []string{}
+	if r.reason != "" {
+		parts = append(parts, r.reason)
+	}
+	parts = append(parts,
+		fmt.Sprintf("skew=%dms", r.health.ClockSkewMs),
+		fmt.Sprintf("reconnects=%d", r.health.ReconnectCount))
+	if r.health.LeakedGoroutines > 0 {
+		parts = append(parts, fmt.Sprintf("leaked=%d", r.health.LeakedGoroutines))
+	}
+	return strings.Join(parts, " ")
 }
 
 func print(rows []row, colour bool) {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "VENUE\tMARKET TYPE\tSYMBOL\tCHANNEL\tSTATUS\tAGE\tSOURCE\tTTL\tPUBLISH SEQ\t")
+	fmt.Fprintln(w, "VENUE\tMARKET TYPE\tSYMBOL\tCHANNEL\tSTATUS\tAGE\tSOURCE\tTTL\tRESTARTS\tPUBLISH SEQ\tREASON\t")
 
 	counts := map[string]int{}
 	for _, r := range rows {
 		counts[r.statusText]++
 
-		line := fmt.Sprintf("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s",
+		line := fmt.Sprintf("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%d\t%s",
 			r.venue, r.marketType, r.symbol, r.channel,
 			marker(r.status)+r.statusText, compactDuration(r.age), r.source, r.ttlText,
-			r.publishSeq, r.note)
+			r.restarts, r.publishSeq, r.reason)
 
 		if colour {
 			if c := colourFor(r.status); c != "" {
@@ -225,7 +294,13 @@ func print(rows []row, colour bool) {
 	}
 	w.Flush()
 
-	summary := fmt.Sprintf("%d streams", len(rows))
+	streams := 0
+	for _, r := range rows {
+		if !r.venueScoped {
+			streams++
+		}
+	}
+	summary := fmt.Sprintf("%d streams", streams)
 	for _, s := range []string{"HEALTHY", "DEGRADED", "STALE", "UNSPECIFIED"} {
 		if n := counts[s]; n > 0 {
 			summary += fmt.Sprintf(", %d %s", n, strings.ToLower(s))
