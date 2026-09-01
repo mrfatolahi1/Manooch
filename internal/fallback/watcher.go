@@ -87,6 +87,7 @@ type Watcher struct {
 	order []string
 
 	mu      sync.Mutex
+	active  map[core.StreamSpec]*poller
 	expired map[core.StreamSpec]bool
 	lastLog time.Time
 }
@@ -123,6 +124,7 @@ func New(opts Options) (*Watcher, error) {
 		opts:    opts,
 		now:     opts.Now,
 		keys:    make(map[string]core.StreamSpec, len(opts.Specs)),
+		active:  map[core.StreamSpec]*poller{},
 		expired: map[core.StreamSpec]bool{},
 	}
 	for _, spec := range opts.Specs {
@@ -160,9 +162,11 @@ func (w *Watcher) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			w.stop()
 			return
 		case m, ok := <-events:
 			if !ok {
+				w.stop()
 				return
 			}
 			w.onExpired(ctx, m.Payload)
@@ -198,23 +202,30 @@ func (w *Watcher) sweep(ctx context.Context) {
 }
 
 // onExpired reacts to one key that is gone.
-func (w *Watcher) onExpired(_ context.Context, key string) {
-	spec, ok := w.keys[key]
-	if !ok {
-		return // another venue's key, or something else entirely
+func (w *Watcher) onExpired(ctx context.Context, key string) {
+	if spec, ok := w.keys[key]; ok {
+		w.Expired(ctx, spec)
 	}
+	// Anything else is another venue's key, or not ours at all.
+}
 
+// Expired reacts to a stream whose key is known to have gone: it reports the
+// expiry once and starts serving the stream over REST.
+func (w *Watcher) Expired(ctx context.Context, spec core.StreamSpec) {
 	// Reported once per outage, not once per sweep: the sweep re-finds a key
 	// that is still missing every interval, and counting each of those as a
 	// fresh expiry would turn one dead stream into a restart every five
 	// seconds and a metric nobody can read.
 	if w.markExpired(spec) {
 		w.opts.Health.KeyExpired(spec)
-		w.opts.Log.Warn("key expired", "stream", spec.String(), "key", key)
+		w.opts.Log.Warn("key expired", "stream", spec.String())
 		if w.opts.OnExpired != nil {
 			w.opts.OnExpired(spec)
 		}
 	}
+	// Retried on every sweep, not only on the first sighting: a stream turned
+	// away by the concurrency cap has to get another chance when one frees up.
+	w.engage(ctx, spec)
 }
 
 // markExpired records a stream as expired, reporting whether that is new.
