@@ -1,9 +1,10 @@
 // Command manooch-feed is the venue daemon: it connects to one exchange,
 // normalizes what it sees, and publishes to Redis.
 //
-// It does not reconnect. A dropped socket logs at ERROR and stops the process:
-// loud and obvious, and the operator's restart policy stays in charge until
-// there is a supervisor that can say what it is doing instead.
+// It supervises rather than exits. A dropped socket redials with jittered
+// backoff behind a circuit breaker, a failed stream relaunches on its own, and
+// an expired key is served over REST until the socket comes back. The only
+// thing that stops the process is a signal.
 package main
 
 import (
@@ -109,11 +110,6 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// A second cancel, so a dead socket ends the run the same way a signal
-	// does rather than through a separate shutdown path that could disagree.
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
 	pub, err := dialRedis(ctx, cfg, instanceID, metrics, logger)
 	if err != nil {
 		return err
@@ -126,7 +122,11 @@ func run() error {
 		return err
 	}
 
-	producers := prod.start(ctx, cfg, pub, metrics, logger, cancel)
+	producers, err := prod.start(ctx, cfg, pub, metrics, logger)
+	if err != nil {
+		shutdown(srv, pub, &sync.WaitGroup{}, cfg, metrics, logger)
+		return err
+	}
 
 	<-ctx.Done()
 	logger.Info("shutting down")
@@ -201,9 +201,10 @@ func shutdown(srv *http.Server, pub *publish.RedisPublisher, producers *sync.Wai
 	case <-done:
 	case <-ctx.Done():
 		// A goroutine past the deadline is holding something the next start
-		// will contend with.
+		// will contend with. Counted rather than set: the health tracker owns
+		// this gauge and may already have leaks of its own on it.
 		logger.Error("shutdown deadline exceeded, goroutines still running")
-		metrics.LeakedGoroutines.WithLabelValues(cfg.Venue).Set(1)
+		metrics.LeakedGoroutines.WithLabelValues(cfg.Venue).Inc()
 	}
 
 	if err := pub.Close(); err != nil {

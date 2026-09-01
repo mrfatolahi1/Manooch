@@ -5,40 +5,18 @@ import (
 	"errors"
 	"log/slog"
 	"sync"
-	"time"
 
-	pb "github.com/you/manooch/gen/manoochv1"
 	"github.com/you/manooch/internal/adapter"
 	"github.com/you/manooch/internal/config"
 	"github.com/you/manooch/internal/core"
+	"github.com/you/manooch/internal/fallback"
+	"github.com/you/manooch/internal/health"
 	"github.com/you/manooch/internal/obs"
 	"github.com/you/manooch/internal/publish"
+	"github.com/you/manooch/internal/supervisor"
 	"github.com/you/manooch/internal/synth"
+	"github.com/you/manooch/internal/transport"
 )
-
-// parseErrLogInterval caps the parse-error log rate. A venue sending frames we
-// cannot read is one fact, not one fact per frame, and nothing may log per
-// message at any level.
-const parseErrLogInterval = time.Second
-
-// A feed runs one venue adapter's sockets and publishes what comes off them.
-//
-// It does not reconnect. A dropped socket logs at ERROR and stops the process,
-// which is loud and obvious; making it survivable is a later phase's job and
-// needs a supervisor this deliberately is not.
-type feed struct {
-	adapter core.Adapter
-	pub     publish.Publisher
-	metrics *obs.Metrics
-	log     *slog.Logger
-	venue   string
-
-	// stop ends the whole process when a socket dies.
-	stop context.CancelFunc
-
-	mu           sync.Mutex
-	lastParseLog time.Time
-}
 
 // producers is what will feed the publisher once Redis is up: either the
 // synthetic generator or a venue adapter's sockets.
@@ -75,9 +53,14 @@ func planProducers(f flags, cfg *config.Config) (*producers, error) {
 	return &producers{adapter: a, plans: plans}, nil
 }
 
-// start launches the producers and returns a group that closes once they have
-// all stopped.
-func (p *producers) start(ctx context.Context, cfg *config.Config, pub publish.Publisher, metrics *obs.Metrics, log *slog.Logger, stop context.CancelFunc) *sync.WaitGroup {
+// start launches the supervision tree and returns a group that closes once
+// every part of it has stopped.
+//
+// Three goroutines sit above the sockets: the health heartbeat, the fallback
+// watcher and the socket supervisor. None of them ends the process. A dead
+// socket redials, a dead stream relaunches, and a goroutine that will not come
+// back is counted and reported rather than escalated into a restart.
+func (p *producers) start(ctx context.Context, cfg *config.Config, pub *publish.RedisPublisher, metrics *obs.Metrics, log *slog.Logger) (*sync.WaitGroup, error) {
 	var wg sync.WaitGroup
 
 	if p.synthetic {
@@ -88,158 +71,129 @@ func (p *producers) start(ctx context.Context, cfg *config.Config, pub publish.P
 			defer wg.Done()
 			gen.Run(ctx)
 		}()
-		return &wg
+		return &wg, nil
 	}
 
-	f := &feed{
-		adapter: p.adapter,
-		pub:     pub,
-		metrics: metrics,
-		log:     log,
-		venue:   p.adapter.Venue(),
-		stop:    stop,
+	tracker, err := health.New(health.Options{
+		Venue:               cfg.Venue,
+		Publisher:           pub,
+		Metrics:             metrics,
+		Log:                 log,
+		HeartbeatInterval:   cfg.Health.HeartbeatInterval.Std(),
+		ClockSkewDegradedMS: cfg.Health.ClockSkewDegradedMS,
+		ClockSkewStaleMS:    cfg.Health.ClockSkewStaleMS,
+		FallbackMaxDuration: cfg.Fallback.MaxDuration.Std(),
+	})
+	if err != nil {
+		return nil, err
 	}
-	log.Info("venue adapter ready", "sockets", len(p.plans))
 
-	for _, plan := range p.plans {
+	specs, err := registerStreams(tracker, p.adapter, p.plans)
+	if err != nil {
+		return nil, err
+	}
+
+	// The watcher and the supervisor each need the other: an expired key
+	// escalates into the supervisor, and a websocket message ends fallback.
+	// Both are assigned before anything starts, so neither closure can be
+	// called against a nil.
+	var (
+		proc    *supervisor.Process
+		watcher *fallback.Watcher
+	)
+
+	if cfg.Fallback.Enabled {
+		watcher, err = fallback.New(fallback.Options{
+			Venue:              cfg.Venue,
+			Adapter:            p.adapter,
+			Publisher:          pub,
+			Redis:              pub.Redis(),
+			DB:                 cfg.Redis.DB,
+			Health:             tracker,
+			Metrics:            metrics,
+			Log:                log,
+			Specs:              specs,
+			MaxConcurrentPolls: cfg.Fallback.MaxConcurrentPolls,
+			PollInterval:       cfg.Fallback.PollInterval.Std(),
+			SweepInterval:      cfg.Fallback.SweepInterval.Std(),
+			MaxDuration:        cfg.Fallback.MaxDuration.Std(),
+			OnExpired:          func(spec core.StreamSpec) { proc.KeyExpired(spec) },
+		})
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		log.Warn("rest fallback disabled: an expired key will stay expired")
+	}
+
+	onMessage := func(core.StreamSpec) {}
+	if watcher != nil {
+		onMessage = watcher.Note
+	}
+
+	proc, err = supervisor.New(supervisor.Options{
+		Venue:         cfg.Venue,
+		Adapter:       p.adapter,
+		Plans:         p.plans,
+		Publisher:     pub,
+		Health:        tracker,
+		Metrics:       metrics,
+		Log:           log,
+		StreamBackoff: backoffPolicy(cfg.Supervisor.StreamRestartBackoff),
+		SocketBackoff: backoffPolicy(cfg.Supervisor.SocketReconnectBackoff),
+		Breaker: transport.BreakerOptions{
+			ConsecutiveFailures: cfg.Supervisor.CircuitBreaker.ConsecutiveFailures,
+			OpenDuration:        cfg.Supervisor.CircuitBreaker.OpenDuration.Std(),
+		},
+		LeakTimeout: cfg.Supervisor.GoroutineLeakTimeout.Std(),
+		OnMessage:   onMessage,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	log.Info("venue adapter ready", "sockets", len(p.plans), "streams", len(specs))
+
+	run := func(fn func(context.Context)) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			f.runSocket(ctx, plan)
+			fn(ctx)
 		}()
 	}
-	return &wg
+	run(tracker.Run)
+	if watcher != nil {
+		run(watcher.Run)
+	}
+	run(proc.Run)
+
+	return &wg, nil
 }
 
-// runSocket dials one plan and reads it to completion.
-func (f *feed) runSocket(ctx context.Context, plan core.SocketPlan) {
-	// Closed from this goroutine on the way out, and from the watchdog below
-	// when the context ends: cancelling a context does not unblock a read that
-	// is already parked in the socket, and only Close does.
-	conn, err := f.adapter.Dial(ctx, plan)
-	if err != nil {
-		f.fail(plan, "dial", err)
-		return
-	}
-	f.log.Info("socket connected", "socket", plan.ID, "streams", len(plan.Specs))
-
-	var closeOnce sync.Once
-	closeConn := func() { closeOnce.Do(func() { _ = conn.Close() }) }
-	defer closeConn()
-
-	watchdogDone := make(chan struct{})
-	defer close(watchdogDone)
-	go func() {
-		select {
-		case <-ctx.Done():
-			closeConn()
-		case <-watchdogDone:
-		}
-	}()
-
-	for {
-		frame, recvNs, err := conn.Read(ctx)
-		if err != nil {
-			if ctx.Err() != nil {
-				f.log.Info("socket closed", "socket", plan.ID)
-				return
+// registerStreams declares every stream to the health tracker before anything
+// runs, so a stream that never receives a byte still has a status to publish
+// rather than being indistinguishable from one nobody configured.
+func registerStreams(tracker *health.Tracker, a core.Adapter, plans []core.SocketPlan) ([]core.StreamSpec, error) {
+	for _, plan := range plans {
+		for _, spec := range plan.Specs {
+			venueSymbol, err := a.VenueSymbol(spec.Instrument)
+			if err != nil {
+				return nil, err
 			}
-			f.fail(plan, "read", err)
-			return
+			tracker.Register(spec, venueSymbol, plan.ID)
 		}
-		f.handleFrame(ctx, plan, frame, recvNs)
 	}
+	return tracker.Specs(), nil
 }
 
-// handleFrame turns one frame into published messages. A frame we cannot parse
-// is counted and, at most once a second, logged; it does not stop the socket.
-// One malformed frame is not a reason to go dark on every other stream, and the
-// keys it would have refreshed expire on their own and report themselves stale.
-func (f *feed) handleFrame(ctx context.Context, plan core.SocketPlan, frame []byte, recvNs int64) {
-	msgs, err := f.adapter.Parse(frame, recvNs)
-	if err != nil {
-		f.countParseError(plan, err)
-		return
+// backoffPolicy translates one configured backoff block. The transport package
+// is handed values rather than reading config itself, so a test can build a
+// policy without a YAML file.
+func backoffPolicy(c config.BackoffConfig) transport.Policy {
+	return transport.Policy{
+		Initial:    c.Initial.Std(),
+		Max:        c.Max.Std(),
+		Multiplier: c.Multiplier,
+		Jitter:     c.Jitter,
 	}
-	if len(msgs) == 0 {
-		return // an ack, a pong, or a heartbeat
-	}
-
-	// The gap between the venue's clock and ours. Recorded before publishing
-	// so it is present even if Redis is refusing writes, which is exactly when
-	// it is worth reading.
-	f.observeSkew(msgs[0])
-
-	// Counted once per channel the frame carried, so a quiet channel is
-	// visible per stream rather than hidden in a socket-wide total.
-	counted := make(map[pb.Channel]bool, len(msgs))
-	for _, m := range msgs {
-		if !counted[m.Channel] {
-			counted[m.Channel] = true
-			f.metrics.WSFramesReceived.WithLabelValues(
-				f.venue,
-				core.MarketTypeName(m.Spec.Instrument.MarketType),
-				core.ChannelName(m.Channel),
-			).Inc()
-		}
-		// Already counted and rate-limit logged by the publisher.
-		_ = f.pub.Publish(ctx, m.Key, m.Proto, m.TTL)
-	}
-}
-
-// observeSkew records exchange time minus receive time. A venue clock ahead of
-// ours reads positive; the sign is kept because losing it would hide which way
-// the two disagree, and every freshness number depends on the answer.
-func (f *feed) observeSkew(m core.Message) {
-	env, ok := m.Proto.(interface{ GetEnv() *pb.Envelope })
-	if !ok {
-		return
-	}
-	e := env.GetEnv()
-	if e == nil || e.ExchangeTimeNs <= 0 || e.RecvTimeNs <= 0 {
-		return
-	}
-	skewMS := float64(e.ExchangeTimeNs-e.RecvTimeNs) / float64(time.Millisecond)
-	f.metrics.ClockSkewMS.WithLabelValues(f.venue).Set(skewMS)
-}
-
-// countParseError classifies the failure from the error itself rather than by
-// matching strings, and counts a range rejection separately: it is the one
-// parse failure that would otherwise have published a plausible wrong price.
-func (f *feed) countParseError(plan core.SocketPlan, err error) {
-	kind, channel := "unclassified", core.ChannelName(pb.Channel_CHANNEL_UNSPECIFIED)
-
-	var pe *core.ParseError
-	if errors.As(err, &pe) {
-		kind = pe.Kind
-		channel = core.ChannelName(pe.Channel)
-	}
-	f.metrics.ParseErrors.WithLabelValues(f.venue, channel, kind).Inc()
-	if kind == core.KindRange {
-		f.metrics.RangeErrors.WithLabelValues(f.venue, channel).Inc()
-	}
-
-	now := time.Now()
-	f.mu.Lock()
-	log := now.Sub(f.lastParseLog) >= parseErrLogInterval
-	if log {
-		f.lastParseLog = now
-	}
-	f.mu.Unlock()
-
-	if log {
-		f.log.Warn("frame not parsed", "socket", plan.ID, "kind", kind, "channel", channel, "error", err.Error())
-	}
-}
-
-// fail reports a dead socket and stops the process.
-//
-// M1 does not reconnect. Exiting is louder than retrying quietly and leaves
-// the operator's restart policy in charge, which is the honest behaviour until
-// there is a supervisor that can say what it is doing.
-func (f *feed) fail(plan core.SocketPlan, op string, err error) {
-	f.log.Error("socket failed, shutting down",
-		"socket", plan.ID, "op", op, "error", err.Error(),
-		"note", "this build does not reconnect")
-	f.stop()
 }
