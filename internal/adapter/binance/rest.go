@@ -21,10 +21,17 @@ import (
 // second source that could disagree.
 const premiumIndexPath = "/fapi/v1/premiumIndex"
 
-// maxRESTBodyBytes caps a REST response. A gateway error page is not a price
-// list, and reading an unbounded body from a host having a bad day is how a
-// fallback becomes the outage.
-const maxRESTBodyBytes = 1 << 20
+// Caps on a REST response body. A gateway error page is not a price list, and
+// reading an unbounded body from a host having a bad day is how a fallback
+// becomes the outage.
+//
+// The metadata cap is far larger because the response genuinely is: the whole
+// USD-M contract list runs to a couple of megabytes, and a cap that truncated
+// it would look exactly like a venue that had delisted everything.
+const (
+	maxRESTBodyBytes     = 1 << 20
+	maxMetadataBodyBytes = 32 << 20
+)
 
 // premiumIndex is the /fapi/v1/premiumIndex response for one symbol.
 type premiumIndex struct {
@@ -62,32 +69,9 @@ func (a *Adapter) FetchOnce(ctx context.Context, spec core.StreamSpec) ([]core.M
 	}
 
 	u := a.opts.RESTEndpoint + premiumIndexPath + "?" + url.Values{"symbol": {sym}}.Encode()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	body, recvNs, err := a.get(ctx, u, maxRESTBodyBytes, spec.Channel, sym)
 	if err != nil {
 		return nil, fmt.Errorf("binance: fetch %s: %w", spec, err)
-	}
-
-	resp, err := a.opts.HTTPClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("binance: fetch %s: %w", spec, err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxRESTBodyBytes))
-
-	// Stamped here for the same reason the read loop stamps it there: this is
-	// when the data arrived, and anything measured after parsing would fold
-	// our own work into the venue's latency.
-	recvNs := time.Now().UnixNano()
-
-	if err != nil {
-		return nil, fmt.Errorf("binance: fetch %s: %w", spec, err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		// Binance answers a rejection with a code and a message; passing them
-		// through is the difference between a fixable error and "HTTP 400".
-		return nil, core.NewParseError(core.KindVenue, spec.Channel, sym, nil,
-			"%s: %s", resp.Status, truncate(string(body), 200))
 	}
 
 	var pi premiumIndex
@@ -155,6 +139,39 @@ func (a *Adapter) restMessage(spec core.StreamSpec, pi premiumIndex, recvNs int6
 		}), nil
 	}
 	return nil, fmt.Errorf("binance: %s: channel %s is not served", spec, core.ChannelName(spec.Channel))
+}
+
+// get performs one public GET and returns the body with the instant it landed.
+//
+// recvNs is stamped the moment the body is read and before anything looks at
+// it, for the same reason the websocket read loop stamps it there: measured
+// after parsing it would fold our own work into the venue's latency.
+//
+// A non-200 comes back as a ParseError of kind venue carrying Binance's own
+// code and message, which is the difference between a fixable error and
+// "HTTP 400".
+func (a *Adapter) get(ctx context.Context, url string, limit int64, ch pb.Channel, symbol string) ([]byte, int64, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	resp, err := a.opts.HTTPClient.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, limit))
+	recvNs := time.Now().UnixNano()
+
+	if readErr != nil {
+		return nil, recvNs, readErr
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, recvNs, core.NewParseError(core.KindVenue, ch, symbol, nil,
+			"%s: %s", resp.Status, truncate(string(body), 200))
+	}
+	return body, recvNs, nil
 }
 
 // truncate bounds an error body so one bad response cannot fill the log.

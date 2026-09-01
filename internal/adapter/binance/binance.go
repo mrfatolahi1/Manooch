@@ -310,8 +310,3 @@ func (a *Adapter) RESTCost(op core.Operation) int {
 		return 0
 	}
 }
-
-// FetchMetadata is not implemented yet.
-func (a *Adapter) FetchMetadata(ctx context.Context, mt pb.MarketType) ([]*pb.InstrumentMeta, error) {
-	return nil, fmt.Errorf("binance: FetchMetadata: %w", core.ErrNotImplemented)
-}

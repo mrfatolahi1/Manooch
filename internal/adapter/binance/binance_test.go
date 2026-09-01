@@ -446,13 +446,6 @@ func TestNewRejectsIncompleteOptions(t *testing.T) {
 	}
 }
 
-func TestFetchMetadataIsNotImplemented(t *testing.T) {
-	_, err := newAdapter(t).FetchMetadata(context.Background(), binance.MarketType)
-	if !errors.Is(err, core.ErrNotImplemented) {
-		t.Errorf("FetchMetadata = %v, want core.ErrNotImplemented", err)
-	}
-}
-
 func TestRESTCost(t *testing.T) {
 	a := newAdapter(t)
 	if got := a.RESTCost(core.OpFetchOnce); got != 1 {
@@ -649,5 +642,156 @@ func TestLimiterDenialStopsTheRequest(t *testing.T) {
 	}
 	if _, err := a.Dial(context.Background(), plans[0]); !errors.Is(err, ratelimit.ErrBudgetExhausted) {
 		t.Errorf("Dial = %v, want ErrBudgetExhausted", err)
+	}
+}
+
+// ---------- metadata ----------
+
+// exchangeInfoBody is one perpetual, one dated delivery contract on the same
+// pair, and one symbol whose quote asset this adapter has no mapping for.
+const exchangeInfoBody = `{
+  "timezone":"UTC","serverTime":1562305380000,
+  "rateLimits":[{"rateLimitType":"REQUEST_WEIGHT","interval":"MINUTE","limit":2400}],
+  "symbols":[
+    {"symbol":"BTCUSDT","pair":"BTCUSDT","contractType":"PERPETUAL","status":"TRADING",
+     "baseAsset":"BTC","quoteAsset":"USDT",
+     "filters":[
+       {"filterType":"PRICE_FILTER","maxPrice":"4529764","minPrice":"556.80","tickSize":"0.10"},
+       {"filterType":"LOT_SIZE","maxQty":"1000","minQty":"0.001","stepSize":"0.001"},
+       {"filterType":"MIN_NOTIONAL","notional":"100"},
+       {"filterType":"MAX_NUM_ORDERS","limit":200}
+     ]},
+    {"symbol":"BTCUSDT_240329","pair":"BTCUSDT","contractType":"CURRENT_QUARTER","status":"TRADING",
+     "filters":[{"filterType":"PRICE_FILTER","tickSize":"0.10"},
+                {"filterType":"LOT_SIZE","maxQty":"1000","minQty":"0.001","stepSize":"0.001"}]},
+    {"symbol":"BTCXYZ","pair":"BTCXYZ","contractType":"PERPETUAL","status":"TRADING",
+     "filters":[{"filterType":"PRICE_FILTER","tickSize":"0.10"},
+                {"filterType":"LOT_SIZE","maxQty":"1000","minQty":"0.001","stepSize":"0.001"}]},
+    {"symbol":"ETHUSDT","pair":"ETHUSDT","contractType":"PERPETUAL","status":"SETTLING",
+     "filters":[{"filterType":"PRICE_FILTER","tickSize":"0.01"},
+                {"filterType":"LOT_SIZE","maxQty":"10000","minQty":"0.01","stepSize":"0.01"}]}
+  ]}`
+
+// TestFetchMetadata: the public instrument list, mapped onto the scales
+// everything else in the service uses.
+func TestFetchMetadata(t *testing.T) {
+	var gotPath string
+	a := restAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.RequestURI()
+		_, _ = w.Write([]byte(exchangeInfoBody))
+	})
+
+	metas, err := a.FetchMetadata(context.Background(), binance.MarketType)
+	if err != nil {
+		t.Fatalf("FetchMetadata: %v", err)
+	}
+	if gotPath != "/fapi/v1/exchangeInfo" {
+		t.Errorf("requested %q", gotPath)
+	}
+
+	// The dated contract and the unmappable quote asset are skipped, not
+	// errors: the endpoint lists every contract Binance has, and failing on one
+	// nobody asked about would take the whole refresh down.
+	if len(metas) != 2 {
+		t.Fatalf("metas = %d, want 2 (BTCUSDT and ETHUSDT)", len(metas))
+	}
+
+	btc := metas[0]
+	if got := btc.Env.Instrument.Canonical; got != "BTC_USDT" {
+		t.Errorf("canonical = %q", got)
+	}
+	if got := btc.Env.Instrument.VenueSymbol; got != "BTCUSDT" {
+		t.Errorf("venue_symbol = %q", got)
+	}
+	if got := price.Price(btc.TickSize).String(); got != "0.1" {
+		t.Errorf("tick_size = %s, want 0.1", got)
+	}
+	if got := price.Size(btc.LotSize).String(); got != "0.001" {
+		t.Errorf("lot_size = %s, want 0.001", got)
+	}
+	if got := price.Size(btc.MinSize).String(); got != "0.001" {
+		t.Errorf("min_size = %s, want 0.001", got)
+	}
+	if got := price.Size(btc.MaxSize).String(); got != "1000" {
+		t.Errorf("max_size = %s, want 1000", got)
+	}
+	if got := price.Price(btc.MinNotional).String(); got != "100" {
+		t.Errorf("min_notional = %s, want 100", got)
+	}
+	// Linear perps trade in base units, so the multiplier is one — stated, not
+	// left zero: a consumer multiplying by a missing multiplier sizes nothing.
+	if got := price.Size(btc.ContractMultiplier).String(); got != "1" {
+		t.Errorf("contract_multiplier = %s, want 1", got)
+	}
+	if !btc.Active {
+		t.Error("a TRADING symbol is not active")
+	}
+	if btc.LastRefreshNs <= 0 {
+		t.Error("last_refresh_ns not stamped")
+	}
+	if btc.Env.Source != pb.Source_SOURCE_REST {
+		t.Errorf("source = %v, want REST", btc.Env.Source)
+	}
+	if btc.Env.Status == pb.Status_STATUS_UNSPECIFIED {
+		t.Error("status is unspecified")
+	}
+	if want := 1562305380000 * int64(time.Millisecond); btc.Env.ExchangeTimeNs != want {
+		t.Errorf("exchange_time_ns = %d, want %d", btc.Env.ExchangeTimeNs, want)
+	}
+	if btc.Env.PublishTimeNs != 0 || btc.Env.PublishSeq != 0 {
+		t.Error("the adapter stamped publisher-owned fields")
+	}
+
+	// A symbol that is not trading is published and marked inactive rather
+	// than dropped: silence would read as a symbol the venue never had.
+	eth := metas[1]
+	if eth.Active {
+		t.Error("a SETTLING symbol is active")
+	}
+}
+
+// TestFetchMetadataRejectsUnusableFilters: a symbol we do serve, with no
+// precision, is an error. Precision a consumer cannot round an order to is not
+// metadata.
+func TestFetchMetadataRejectsUnusableFilters(t *testing.T) {
+	a := restAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"serverTime":1562305380000,"symbols":[
+		  {"symbol":"BTCUSDT","contractType":"PERPETUAL","status":"TRADING","filters":[]}]}`))
+	})
+
+	_, err := a.FetchMetadata(context.Background(), binance.MarketType)
+	var pe *core.ParseError
+	if !errors.As(err, &pe) {
+		t.Fatalf("FetchMetadata = %v (%T), want *core.ParseError", err, err)
+	}
+	if pe.Kind != core.KindField {
+		t.Errorf("kind = %q, want %q", pe.Kind, core.KindField)
+	}
+}
+
+// TestFetchMetadataRejectsAnEmptyList: a response listing no perpetuals is not
+// an empty venue, it is a response we did not understand.
+func TestFetchMetadataRejectsAnEmptyList(t *testing.T) {
+	a := restAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"serverTime":1562305380000,"symbols":[]}`))
+	})
+	if _, err := a.FetchMetadata(context.Background(), binance.MarketType); err == nil {
+		t.Error("FetchMetadata accepted a list with no perpetuals")
+	}
+}
+
+// TestFetchMetadataSurfacesVenueErrors keeps Binance's own message, the same
+// way FetchOnce does.
+func TestFetchMetadataSurfacesVenueErrors(t *testing.T) {
+	a := restAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"code":-1003,"msg":"Too many requests."}`))
+	})
+	_, err := a.FetchMetadata(context.Background(), binance.MarketType)
+	if err == nil {
+		t.Fatal("FetchMetadata against a 429 succeeded")
+	}
+	if !contains(err.Error(), "-1003") {
+		t.Errorf("error drops the venue's code: %v", err)
 	}
 }
