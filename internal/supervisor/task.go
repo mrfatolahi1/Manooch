@@ -107,6 +107,18 @@ func (t *Task) loop(ctx context.Context) {
 			return
 		}
 
+		// Anything that asked for a restart while the previous run was being
+		// stopped, or during the backoff, was asking about a goroutine that is
+		// already gone. Relaunching and immediately stopping again would turn
+		// one failure noticed by three watchers into three restarts. Nothing
+		// is stale before the first launch, so this starts at the second.
+		if attempt > 0 {
+			select {
+			case <-t.restart:
+			default:
+			}
+		}
+
 		runCtx, cancel := context.WithCancel(ctx)
 		exit := make(chan error, 1) // buffered: a leaked goroutine must not block on the send
 		go func() { exit <- t.opts.Run(runCtx) }()
@@ -135,29 +147,44 @@ func (t *Task) loop(ctx context.Context) {
 	}
 }
 
-// stop is the restart procedure, and the order is the whole point:
+// stop runs the restart procedure and counts a leak when it does not work.
+func (t *Task) stop(cancel context.CancelFunc, exit <-chan error) error {
+	err := StopGoroutine(cancel, t.opts.Unblock, exit, t.opts.LeakTimeout)
+	if errors.Is(err, ErrLeaked) {
+		t.leaks.Add(1)
+	}
+	return err
+}
+
+// StopGoroutine ends one goroutine, and the order is the whole point:
 //
 //  1. cancel the context, so a goroutine that watches it can leave;
-//  2. close the connection, because one blocked in Read cannot see step 1;
+//  2. unblock it — close the connection — because one parked in Read cannot
+//     see step 1: Go cannot kill a goroutine, and the only way to end a
+//     blocking call is to break what it is blocked on;
 //  3. wait, bounded, because step 2 is not guaranteed to have worked.
 //
-// A goroutine that has not returned by the end of step 3 is leaked. It is
-// counted and logged, and the caller relaunches anyway: refusing to would trade
-// one stuck stream for a permanently dead one.
-func (t *Task) stop(cancel context.CancelFunc, exit <-chan error) error {
-	cancel()
-	if t.opts.Unblock != nil {
-		t.opts.Unblock()
+// exit must be buffered, or a goroutine that returns after the timeout blocks
+// forever on the send and leaks for a second reason.
+//
+// A goroutine still running at the end of step 3 is leaked, and ErrLeaked says
+// so. The caller relaunches anyway: refusing to would trade one stuck stream
+// for a permanently dead one.
+func StopGoroutine(cancel context.CancelFunc, unblock func(), exit <-chan error, timeout time.Duration) error {
+	if cancel != nil {
+		cancel()
+	}
+	if unblock != nil {
+		unblock()
 	}
 
-	timer := time.NewTimer(t.opts.LeakTimeout)
+	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 
 	select {
 	case err := <-exit:
 		return err
 	case <-timer.C:
-		t.leaks.Add(1)
 		return ErrLeaked
 	}
 }

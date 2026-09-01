@@ -160,6 +160,11 @@ type socketRunner struct {
 	// order keeps stream startup deterministic, for logs and tests.
 	order []*streamRunner
 
+	// redial ends the current session when closing the connection is not
+	// enough on its own — a socket whose read never returns still has to be
+	// replaced, and the old goroutine abandoned.
+	redial chan struct{}
+
 	mu        sync.Mutex
 	conn      core.Conn
 	expiredAt map[core.StreamSpec]time.Time
@@ -172,6 +177,7 @@ func newSocketRunner(p *Process, plan core.SocketPlan) *socketRunner {
 		breaker:   transport.NewBreaker(p.opts.Breaker),
 		streams:   make(map[core.StreamSpec]*streamRunner, len(plan.Specs)),
 		expiredAt: map[core.StreamSpec]time.Time{},
+		redial:    make(chan struct{}, 1),
 	}
 	// Half the socket's streams, never fewer than two: one key expiring is a
 	// stream problem, most of them expiring is a connection problem.
@@ -249,44 +255,57 @@ func (s *socketRunner) run(ctx context.Context) {
 
 // session runs the read loop with the stream goroutines behind it, returning
 // why it ended.
+//
+// The read loop gets a goroutine of its own rather than running here, because
+// it is the one that parks in conn.Read: cancelling a context cannot free it,
+// and waiting for it without a bound would hang shutdown behind a socket whose
+// read never returns.
 func (s *socketRunner) session(ctx context.Context) string {
 	sctx, cancel := context.WithCancel(ctx)
-
-	// Cancelling sctx does not unblock a read already parked in the socket.
-	// Closing the connection is the only thing that does, so a watchdog does
-	// it the moment the session context ends — including when the process is
-	// shutting down and the read loop below is still waiting on a frame.
-	watchdog := make(chan struct{})
-	go func() {
-		select {
-		case <-sctx.Done():
-			s.closeConn()
-		case <-watchdog:
-		}
-	}()
 
 	for _, r := range s.order {
 		r.start(sctx)
 	}
+	defer s.stopStreams()
 
-	// One deferred block rather than three, because the order is the restart
-	// procedure in miniature and LIFO would invert it: cancel first, close the
-	// connection second — a goroutine parked in Read never sees the cancel —
-	// and only then wait for the goroutines to come back.
-	defer func() {
-		cancel()
-		close(watchdog)
-		s.closeConn()
-		s.stopStreams()
+	// Buffered, and never read after the select below: an abandoned read loop
+	// that finally returns must not block forever on the send.
+	reasons := make(chan string, 1)
+	exit := make(chan error, 1)
+	conn := s.currentConn()
+	go func() {
+		reasons <- s.readLoop(ctx, conn)
+		exit <- nil
 	}()
 
-	conn := s.currentConn()
+	s.drainRedial()
+
+	var reason string
+	select {
+	case reason = <-reasons:
+	case <-s.redial:
+		reason = "streams expired together"
+	case <-sctx.Done():
+		reason = "shutting down"
+	}
+
+	// Cancel, close, then wait — in that order, because a goroutine parked in
+	// Read never sees the cancel and closing is the only thing that frees it.
+	if err := StopGoroutine(cancel, s.closeConn, exit, s.p.opts.LeakTimeout); errors.Is(err, ErrLeaked) {
+		s.p.opts.Log.Error("socket read loop did not return, abandoning it",
+			"socket", s.plan.ID, "timeout", s.p.opts.LeakTimeout.String())
+		s.p.countLeak()
+	}
+	return reason
+}
+
+// readLoop reads frames until one fails, returning why.
+func (s *socketRunner) readLoop(ctx context.Context, conn core.Conn) string {
 	if conn == nil {
 		return "connection closed"
 	}
-
 	for {
-		frame, recvNs, err := conn.Read(sctx)
+		frame, recvNs, err := conn.Read(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
 				return "shutting down"
@@ -294,6 +313,14 @@ func (s *socketRunner) session(ctx context.Context) string {
 			return "read: " + err.Error()
 		}
 		s.handleFrame(frame, recvNs)
+	}
+}
+
+// drainRedial clears a stale escalation left over from the previous session.
+func (s *socketRunner) drainRedial() {
+	select {
+	case <-s.redial:
+	default:
 	}
 }
 
@@ -354,9 +381,14 @@ func (s *socketRunner) noteExpiry(spec core.StreamSpec) {
 	if escalate {
 		s.p.opts.Log.Error("streams expired together, redialing socket",
 			"socket", s.plan.ID, "expired", n, "quorum", s.quorum)
-		// Closing is what ends the session: the read loop is parked in the
-		// socket and will not see anything else.
+		// Close first, because that is what a healthy read loop reacts to;
+		// then signal, so a read that does not come back is abandoned rather
+		// than leaving the socket wedged forever.
 		s.closeConn()
+		select {
+		case s.redial <- struct{}{}:
+		default:
+		}
 		return
 	}
 	if r != nil {
