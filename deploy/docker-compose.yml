@@ -35,3 +35,28 @@ services:
       start_period: 5s
     mem_limit: 512m
     restart: unless-stopped
+
+  # One process per venue, sharing nothing but Redis. A reconnect storm, a rate
+  # limit or a ban on one venue cannot reach the other, and killing either
+  # leaves the other publishing without a gap:
+  #
+  #   docker compose kill feed-binance
+  #   manooch-status --venue=KUCOIN
+  feed-kucoin:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    command: ["--exchange=KUCOIN", "--config=/etc/manooch"]
+    volumes:
+      - ../config:/etc/manooch:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9101/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    mem_limit: 512m
+    restart: unless-stopped
