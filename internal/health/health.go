@@ -13,6 +13,7 @@
 package health
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -578,28 +579,41 @@ func abs(v int64) int64 {
 
 // ---------- transitions ----------
 
-// update applies one state change under the mutex and recomputes the status of
-// every stream it touched.
+// update applies one state change under the mutex, recomputes the status of
+// every stream it touched, and publishes whatever moved.
 //
 // mutate returns the instruments whose streams may have moved; returning nil
 // means the change was venue-level, which is recomputed on every call anyway.
+//
+// Publishing happens outside the mutex and on the caller's goroutine, because a
+// transition a consumer learns about one heartbeat late is a transition they
+// traded through. There are a handful an hour, so the Redis round trip is not
+// on any hot path.
 func (t *Tracker) update(mutate func() []*instrument) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.refresh(mutate())
+	moved := t.refresh(mutate())
+	t.mu.Unlock()
+
+	// Background rather than a request context: these are called from whatever
+	// goroutine noticed the change, including one that is shutting down, and
+	// the last transition before an exit is the one worth having. The Redis
+	// client's own write timeout bounds it.
+	t.write(context.Background(), moved)
 }
 
-// refresh recomputes status for the given instruments and exports the gauge for
-// any stream that moved. Callers hold the mutex.
+// refresh recomputes status for the given instruments and returns a snapshot
+// for every health key whose contents changed. Callers hold the mutex.
 //
 // Passing t.order refreshes everything, which the heartbeat does: some
 // transitions are purely the passage of time — fallback crossing its maximum
 // duration is the one that matters — and no event fires for those.
-func (t *Tracker) refresh(touched []*instrument) {
+func (t *Tracker) refresh(touched []*instrument) []snapshot {
 	// A venue-level change moves every stream, so it is recomputed on every
 	// update rather than only when an event says to.
+	prevStatus, prevReason := t.venueStatus, t.venueReason
 	t.venueStatus, t.venueReason = t.computeVenue()
 
+	var moved []snapshot
 	for _, in := range touched {
 		for _, s := range in.streams {
 			status, reason := t.compute(s)
@@ -611,8 +625,24 @@ func (t *Tracker) refresh(touched []*instrument) {
 			t.exportStatus(s)
 			t.logTransition(s, prev)
 		}
-		in.status, in.reason = in.worst()
+		status, reason := in.worst()
+		if status == in.status && reason == in.reason {
+			continue
+		}
+		in.status, in.reason = status, reason
+		moved = append(moved, t.snapshotInstrument(in))
 	}
+
+	if t.venueStatus != prevStatus || t.venueReason != prevReason {
+		if prevStatus != pb.Status_STATUS_UNSPECIFIED {
+			t.opts.Log.Info("venue status",
+				"from", core.StatusName(prevStatus),
+				"to", core.StatusName(t.venueStatus),
+				"reason", t.venueReason)
+		}
+		moved = append(moved, t.snapshotVenue())
+	}
+	return moved
 }
 
 // exportStatus writes the stream status gauge. Callers hold the mutex.
