@@ -3,6 +3,7 @@ package fallback_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"sync"
@@ -17,6 +18,7 @@ import (
 	"github.com/you/manooch/internal/health"
 	"github.com/you/manooch/internal/obs"
 	"github.com/you/manooch/internal/publish"
+	"github.com/you/manooch/internal/ratelimit"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -325,6 +327,32 @@ func TestFailedPollIsStale(t *testing.T) {
 		st, reason := h.tracker.Status(spec)
 		return st == pb.Status_STATUS_STALE && reason == "rest poll failed"
 	})
+}
+
+// TestLimiterDenialIsStale: a poll the rate limiter refused did not happen, so
+// the key it would have refreshed stays absent. Reporting that as anything
+// other than STALE would be the silent skip this service exists to prevent —
+// the consumer would see no data and nothing anywhere would say why.
+func TestLimiterDenialIsStale(t *testing.T) {
+	h := newHarness(t, 4)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	h.adapter.FetchFunc = func(context.Context, core.StreamSpec) ([]core.Message, error) {
+		return nil, fmt.Errorf("fetch: %w", ratelimit.ErrBudgetExhausted)
+	}
+
+	spec := h.specs[0]
+	h.watcher.Expired(ctx, spec)
+	t.Cleanup(func() { h.watcher.Note(spec) })
+
+	eventually(t, "the refused poll to reach the status", func() bool {
+		st, reason := h.tracker.Status(spec)
+		return st == pb.Status_STATUS_STALE && reason == "rest poll failed"
+	})
+	if got := h.pub.count(key(spec)); got != 0 {
+		t.Errorf("%d values published from polls that never happened", got)
+	}
 }
 
 // TestEmptyAnswerIsStale: the venue answered, but not with this value. Missing
