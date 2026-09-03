@@ -25,8 +25,11 @@ without complaining — silently, into the wrong meaning.
 
 ## Regenerating
 
-```
-make proto
+```sh
+protoc --proto_path=schema \
+  --go_out=. --go_opt=module=github.com/you/manooch \
+  schema/manooch.proto
+go build ./gen/...
 ```
 
 Requires `protoc` and `protoc-gen-go` on `PATH`:

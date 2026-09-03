@@ -49,5 +49,6 @@ Both forms matter. The numeric reservation stops a future channel decoding as th
 - **New fields are additive with a new number.** Ignoring what it does not know is the only change an old consumer survives.
 - **Bump `schema_version` when an existing field's meaning changes.** Same number and type with different semantics is the one change the wire format cannot signal on its own.
 - **Reserve by number and by name when deleting.** A reused number decodes silently into the retired meaning.
-- **Regenerate and commit `gen/` in the same commit as the `.proto`** (`make proto`).
+- **Regenerate and commit `gen/` in the same commit as the `.proto`** using the
+  command in `schema/README.md`.
 - **Keep `Envelope` as field 1 of every payload**, or `publish.Decode` breaks.

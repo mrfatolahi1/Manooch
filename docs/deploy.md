@@ -1,13 +1,12 @@
-Covers: M3 · `deploy/`, `Makefile`, `go.mod`, `.dockerignore`, `.gitignore`
+Covers: M3 · `deploy/`, `go.mod`, `.dockerignore`, `.gitignore`
 
 | File | Holds |
 |---|---|
 | `deploy/Dockerfile` | `golang:1.27-alpine` builds all three binaries `CGO_ENABLED=0`; `alpine:3.22` runs them as uid 10001 |
 | `deploy/docker-compose.yml` | `redis`, `feed-binance`, `feed-kucoin`; one service block per venue |
 | `deploy/redis.conf` | Six directives, all load-bearing |
-| `Makefile` | `proto`, `build`, `test`, `test-integration`, `test-smoke`, `lint`, `validate`, `run`, `up`, `down`, `clean` |
 | `go.mod` / `go.sum` | Module `github.com/you/manooch`, Go 1.27.0 |
-| `.dockerignore` / `.gitignore` | Keep `.git`, `bin/`, `.local/`, `testdata/raw/` out of the context and the repo |
+| `.dockerignore` / `.gitignore` | Keep `.git`, build output, local overrides and raw captures out of the context and the repo |
 
 ## redis.conf
 
@@ -57,12 +56,48 @@ github.com/coder/websocket
 
 No framework, no ORM, no CLI or config library: `net/http.ServeMux` and `flag` cover what is needed.
 
+## Commands
+
+The repository uses the underlying tools directly. Build and check it with:
+
+```sh
+go build -trimpath -o bin/ ./cmd/...
+go test ./...
+go test -tags=integration -count=1 -timeout=10m ./...
+go vet ./...
+gofmt -l $(go list -f '{{.Dir}}' ./...)  # expect no output
+```
+
+The integration suite needs Docker. Smoke tests reach the real venues and are
+intentionally separate from CI:
+
+```sh
+go test -tags=smoke -count=1 -v -timeout=10m ./internal/adapter/...
+```
+
+Validate the resolved configuration without opening Redis, a listener or an
+exchange connection:
+
+```sh
+go run ./cmd/manooch-feed --exchange=BINANCE --config=./config --validate
+go run ./cmd/manooch-feed --exchange=KUCOIN --config=./config --validate
+```
+
+Run the complete stack, or select one feed service:
+
+```sh
+docker compose -f deploy/docker-compose.yml up --build -d
+docker compose -f deploy/docker-compose.yml up --build redis feed-binance
+docker compose -f deploy/docker-compose.yml up --build redis feed-kucoin
+docker compose -f deploy/docker-compose.yml down -v
+```
+
+Regenerating protobuf code needs `protoc` and `protoc-gen-go` on `PATH`; the
+exact command is in `schema/README.md`.
+
 ## Notes
 
 - Redis is published on `127.0.0.1:6379` for the CLI tools. The feed publishes **no** ports — the admin surface stays inside the container.
-- `make run` copies `config/` to `.local/config` with `redis.addr` rewritten to `127.0.0.1`, because the committed default names the compose service. `make run EXCHANGE=KUCOIN` runs the other venue.
 - Both feeds bind the admin surface to `127.0.0.1:9101` inside their own container, so there is no clash and nothing is reachable off-host.
-- `make lint` is `go vet` plus a `gofmt -l` check. `make proto` needs `protoc` and `protoc-gen-go` on `PATH`.
-- `make test` is unit tests only. `make test-integration` needs Docker; `make test-smoke` reaches the real venue and is **not** in CI, so a red build means our code broke rather than that the exchange was slow.
 - Keep `CGO_ENABLED=0`: the runtime image is musl and the build image's libc need not match.
 - Alpine, not distroless — the compose healthcheck uses `wget`.

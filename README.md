@@ -38,8 +38,9 @@ order-placing code path anywhere in the repository.
 ## Bring it up
 
 ```sh
-make up                 # docker compose: Redis + both feeds
-make down
+docker compose -f deploy/docker-compose.yml up --build -d
+docker compose -f deploy/docker-compose.yml ps
+docker compose -f deploy/docker-compose.yml down -v
 ```
 
 Killing one feed leaves the other publishing without a gap — that is what one
@@ -50,12 +51,12 @@ docker compose -f deploy/docker-compose.yml kill feed-binance
 manooch-status --venue=KUCOIN
 ```
 
-Redis is published on `127.0.0.1:6379`. To run one feed against the real venue
-from a checkout:
+Redis is published on `127.0.0.1:6379`. To run only one feed against the real
+venue:
 
 ```sh
-make run                        # BINANCE by default
-make run EXCHANGE=KUCOIN        # needs a Redis on 127.0.0.1:6379
+docker compose -f deploy/docker-compose.yml up --build redis feed-binance
+docker compose -f deploy/docker-compose.yml up --build redis feed-kucoin
 ```
 
 ## Look at the data

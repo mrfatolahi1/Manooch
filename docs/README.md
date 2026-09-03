@@ -19,7 +19,7 @@ Start with [`architecture.md`](architecture.md): the shape, the dependency rule,
 | [`publish.md`](publish.md) | `internal/publish` — key scheme and the write path |
 | [`obs.md`](obs.md) | `internal/obs` — logger and collectors |
 | [`cli.md`](cli.md) | `cmd/*` — the three binaries |
-| [`deploy.md`](deploy.md) | `deploy/`, `Makefile`, `go.mod` |
+| [`deploy.md`](deploy.md) | `deploy/`, `go.mod`, direct development commands |
 
 Building and running: the repository [`README.md`](../README.md). Per-symbol detail: `go doc ./internal/<pkg>` — every exported symbol has a doc comment.
 
