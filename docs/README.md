@@ -17,7 +17,7 @@ Start with [`architecture.md`](architecture.md): the shape, the dependency rule,
 | [`metadata.md`](metadata.md) | `internal/metadata` — refresh cycle, startup dependency, change logging |
 | [`ratelimit.md`](ratelimit.md) | `internal/ratelimit` — the local limiter, budgets, headroom |
 | [`publish.md`](publish.md) | `internal/publish` — key scheme and the write path |
-| [`obs.md`](obs.md) | `internal/obs` — logger and collectors |
+| [`observability.md`](observability.md) | `internal/observability` — logger and collectors |
 | [`cli.md`](cli.md) | `cmd/*` — the three binaries |
 | [`deploy.md`](deploy.md) | `deploy/`, `go.mod`, direct development commands |
 

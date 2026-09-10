@@ -8,18 +8,18 @@ import (
 	"sync"
 	"time"
 
-	pb "github.com/you/manooch/gen/manoochv1"
+	"github.com/you/manooch/gen/manoochv1"
 	"github.com/you/manooch/internal/core"
 	"github.com/you/manooch/internal/health"
-	"github.com/you/manooch/internal/obs"
+	"github.com/you/manooch/internal/observability"
 	"github.com/you/manooch/internal/publish"
 	"github.com/you/manooch/internal/transport"
 	"google.golang.org/protobuf/proto"
 )
 
-// parseErrLogInterval caps the parse-error log rate. A venue sending frames we
-// cannot read is one fact, not one fact per frame.
-const parseErrLogInterval = time.Second
+// parseErrorLogInterval caps the parse-error log rate. A venue sending frames
+// we cannot read is one fact, not one fact per frame.
+const parseErrorLogInterval = time.Second
 
 // defaultExpiryWindow is how long an expired key counts towards the quorum that
 // redials a socket. Wide enough that keys on the same cadence expiring in
@@ -48,7 +48,7 @@ type Options struct {
 
 	Publisher publish.Publisher
 	Health    *health.Tracker
-	Metrics   *obs.Metrics
+	Metrics   *observability.Metrics
 	Log       *slog.Logger
 
 	// StreamBackoff is the wait before relaunching one stream goroutine;
@@ -88,69 +88,69 @@ type Options struct {
 // never exits on a stream or socket failure: the only thing that stops it is
 // its context.
 type Process struct {
-	opts Options
-	now  func() time.Time
+	options Options
+	now     func() time.Time
 
 	sockets  []*socketRunner
 	byStream map[core.StreamSpec]*socketRunner
 
-	mu           sync.Mutex
+	mutex        sync.Mutex
 	leaked       int
 	lastParseLog time.Time
 }
 
 // New builds the supervision tree. It opens nothing.
-func New(opts Options) (*Process, error) {
+func New(options Options) (*Process, error) {
 	switch {
-	case opts.Venue == "":
+	case options.Venue == "":
 		return nil, errors.New("supervisor: no venue")
-	case opts.Adapter == nil:
+	case options.Adapter == nil:
 		return nil, errors.New("supervisor: no adapter")
-	case len(opts.Plans) == 0:
+	case len(options.Plans) == 0:
 		return nil, errors.New("supervisor: no socket plans")
-	case opts.Publisher == nil:
+	case options.Publisher == nil:
 		return nil, errors.New("supervisor: no publisher")
-	case opts.Health == nil:
+	case options.Health == nil:
 		return nil, errors.New("supervisor: no health tracker")
-	case opts.Metrics == nil:
+	case options.Metrics == nil:
 		return nil, errors.New("supervisor: no metrics")
-	case opts.Log == nil:
+	case options.Log == nil:
 		return nil, errors.New("supervisor: no logger")
-	case opts.LeakTimeout <= 0:
-		return nil, fmt.Errorf("supervisor: goroutine leak timeout is %v", opts.LeakTimeout)
+	case options.LeakTimeout <= 0:
+		return nil, fmt.Errorf("supervisor: goroutine leak timeout is %v", options.LeakTimeout)
 	}
-	if opts.Now == nil {
-		opts.Now = time.Now
+	if options.Now == nil {
+		options.Now = time.Now
 	}
-	if opts.ExpiryWindow <= 0 {
-		opts.ExpiryWindow = defaultExpiryWindow
+	if options.ExpiryWindow <= 0 {
+		options.ExpiryWindow = defaultExpiryWindow
 	}
-	if opts.ConnectGrace <= 0 {
-		opts.ConnectGrace = defaultConnectGrace
+	if options.ConnectGrace <= 0 {
+		options.ConnectGrace = defaultConnectGrace
 	}
 
-	p := &Process{opts: opts, now: opts.Now, byStream: map[core.StreamSpec]*socketRunner{}}
-	for _, plan := range opts.Plans {
-		s := newSocketRunner(p, plan)
-		p.sockets = append(p.sockets, s)
-		for _, spec := range plan.Specs {
-			p.byStream[spec] = s
+	process := &Process{options: options, now: options.Now, byStream: map[core.StreamSpec]*socketRunner{}}
+	for _, plan := range options.Plans {
+		runner := newSocketRunner(process, plan)
+		process.sockets = append(process.sockets, runner)
+		for _, specification := range plan.Specifications {
+			process.byStream[specification] = runner
 		}
 	}
-	return p, nil
+	return process, nil
 }
 
 // Run supervises every socket until ctx ends.
-func (p *Process) Run(ctx context.Context) {
-	var wg sync.WaitGroup
-	for _, s := range p.sockets {
-		wg.Add(1)
+func (process *Process) Run(ctx context.Context) {
+	var waitGroup sync.WaitGroup
+	for _, runner := range process.sockets {
+		waitGroup.Add(1)
 		go func() {
-			defer wg.Done()
-			s.run(ctx)
+			defer waitGroup.Done()
+			runner.run(ctx)
 		}()
 	}
-	wg.Wait()
+	waitGroup.Wait()
 }
 
 // KeyExpired escalates a stream whose Redis key reached its TTL.
@@ -158,12 +158,12 @@ func (p *Process) Run(ctx context.Context) {
 // One key is tier 1: restart that stream's goroutine and nothing else. Enough
 // of a socket's keys expiring together is tier 2: the socket is delivering for
 // nobody, so redial it. There is no tier 3 — the process does not exit.
-func (p *Process) KeyExpired(spec core.StreamSpec) {
-	s := p.byStream[spec]
-	if s == nil {
+func (process *Process) KeyExpired(specification core.StreamSpec) {
+	runner := process.byStream[specification]
+	if runner == nil {
 		return
 	}
-	s.noteExpiry(spec)
+	runner.noteExpiry(specification)
 }
 
 // ---------- socket ----------
@@ -171,7 +171,7 @@ func (p *Process) KeyExpired(spec core.StreamSpec) {
 // A socketRunner owns one websocket: dialling it, reading it, and the stream
 // goroutines that publish what comes off it.
 type socketRunner struct {
-	p       *Process
+	process *Process
 	plan    core.SocketPlan
 	breaker *transport.Breaker
 	// quorum is how many of this socket's streams must expire together before
@@ -187,91 +187,91 @@ type socketRunner struct {
 	// replaced, and the old goroutine abandoned.
 	redial chan struct{}
 
-	mu   sync.Mutex
-	conn core.Conn
+	mutex      sync.Mutex
+	connection core.Conn
 	// connectedAt is when the current connection came up, for the grace period
 	// in noteExpiry.
 	connectedAt time.Time
 	expiredAt   map[core.StreamSpec]time.Time
 }
 
-func newSocketRunner(p *Process, plan core.SocketPlan) *socketRunner {
-	s := &socketRunner{
-		p:         p,
+func newSocketRunner(process *Process, plan core.SocketPlan) *socketRunner {
+	runner := &socketRunner{
+		process:   process,
 		plan:      plan,
-		breaker:   transport.NewBreaker(p.opts.Breaker),
-		streams:   make(map[core.StreamSpec]*streamRunner, len(plan.Specs)),
+		breaker:   transport.NewBreaker(process.options.Breaker),
+		streams:   make(map[core.StreamSpec]*streamRunner, len(plan.Specifications)),
 		expiredAt: map[core.StreamSpec]time.Time{},
 		redial:    make(chan struct{}, 1),
 	}
 	// Half the socket's streams, never fewer than two: one key expiring is a
 	// stream problem, most of them expiring is a connection problem.
-	s.quorum = max(2, len(plan.Specs)/2)
+	runner.quorum = max(2, len(plan.Specifications)/2)
 
-	for _, spec := range plan.Specs {
-		if _, dup := s.streams[spec]; dup {
+	for _, specification := range plan.Specifications {
+		if _, duplicate := runner.streams[specification]; duplicate {
 			continue
 		}
-		r := &streamRunner{s: s, spec: spec, wake: make(chan struct{}, 1)}
-		s.streams[spec] = r
-		s.order = append(s.order, r)
+		stream := &streamRunner{socket: runner, specification: specification, wake: make(chan struct{}, 1)}
+		runner.streams[specification] = stream
+		runner.order = append(runner.order, stream)
 	}
-	return s
+	return runner
 }
 
 // run dials and reads the socket until ctx ends, redialling with backoff.
-func (s *socketRunner) run(ctx context.Context) {
-	log := s.p.opts.Log.With("socket", s.plan.ID)
+func (runner *socketRunner) run(ctx context.Context) {
+	log := runner.process.options.Log.With("socket", runner.plan.ID)
 
 	for attempt := 0; ctx.Err() == nil; {
 		// The breaker is asked before every attempt. While it is open no
 		// connection is made at all — not a slow one, not a probe — because a
 		// venue that is refusing us is asking to be left alone, and a client
 		// that keeps knocking is how an IP ban is earned.
-		if wait := s.breaker.Retry(); wait > 0 {
-			s.p.opts.Health.SocketState(s.plan.ID, health.SocketCircuitOpen,
-				fmt.Sprintf("%d consecutive failures", s.breaker.Failures()))
+		if wait := runner.breaker.Retry(); wait > 0 {
+			runner.process.options.Health.SocketState(runner.plan.ID, health.SocketCircuitOpen,
+				fmt.Sprintf("%d consecutive failures", runner.breaker.Failures()))
 			log.Error("circuit open, making no connection attempt",
-				"failures", s.breaker.Failures(), "retry_in", wait.String())
+				"failures", runner.breaker.Failures(), "retry_in", wait.String())
 			if !transport.Wait(ctx, wait) {
 				return
 			}
 			continue
 		}
 
-		s.p.opts.Health.SocketState(s.plan.ID, health.SocketDialing, "dialing")
-		conn, err := s.p.opts.Adapter.Dial(ctx, s.plan)
+		runner.process.options.Health.SocketState(runner.plan.ID, health.SocketDialing, "dialing")
+		connection, err := runner.process.options.Adapter.Dial(ctx, runner.plan)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
 			}
-			s.breaker.Fail()
-			log.Error("dial failed", "error", err.Error(), "failures", s.breaker.Failures())
-			if !s.p.opts.SocketBackoff.Sleep(ctx, attempt) {
+			runner.breaker.Fail()
+			log.Error("dial failed", "error", err.Error(), "failures", runner.breaker.Failures())
+			if !runner.process.options.SocketBackoff.Sleep(ctx, attempt) {
 				return
 			}
 			attempt++
 			continue
 		}
 
-		s.breaker.Succeed()
+		runner.breaker.Succeed()
 		attempt = 0
-		s.setConn(conn)
-		s.p.opts.Health.SocketState(s.plan.ID, health.SocketConnected, "")
-		log.Info("socket connected", "streams", len(s.plan.Specs))
+		runner.setConn(connection)
+		runner.process.options.Health.SocketState(runner.plan.ID, health.SocketConnected, "")
+		log.Info("socket connected", "streams", len(runner.plan.Specifications))
 
-		reason := s.session(ctx)
+		reason := runner.session(ctx)
 
-		s.closeConn()
+		runner.closeConn()
 		if ctx.Err() != nil {
 			log.Info("socket closed")
 			return
 		}
-		s.p.opts.Health.SocketState(s.plan.ID, health.SocketDialing, reason)
-		s.p.opts.Health.Reconnected(s.plan.ID)
+		runner.process.options.Health.SocketState(runner.plan.ID, health.SocketDialing, reason)
+		runner.process.options.Health.Reconnected(runner.plan.ID)
 		log.Error("socket down, reconnecting", "reason", reason)
 
-		if !s.p.opts.SocketBackoff.Sleep(ctx, attempt) {
+		if !runner.process.options.SocketBackoff.Sleep(ctx, attempt) {
 			return
 		}
 		attempt++
@@ -282,36 +282,36 @@ func (s *socketRunner) run(ctx context.Context) {
 // why it ended.
 //
 // The read loop gets a goroutine of its own rather than running here, because
-// it is the one that parks in conn.Read: cancelling a context cannot free it,
+// it is the one that parks in Conn.Read: cancelling a context cannot free it,
 // and waiting for it without a bound would hang shutdown behind a socket whose
 // read never returns.
-func (s *socketRunner) session(ctx context.Context) string {
-	sctx, cancel := context.WithCancel(ctx)
+func (runner *socketRunner) session(ctx context.Context) string {
+	sessionCtx, cancel := context.WithCancel(ctx)
 
-	for _, r := range s.order {
-		r.start(sctx)
+	for _, stream := range runner.order {
+		stream.start(sessionCtx)
 	}
-	defer s.stopStreams()
+	defer runner.stopStreams()
 
 	// Buffered, and never read after the select below: an abandoned read loop
 	// that finally returns must not block forever on the send.
 	reasons := make(chan string, 1)
 	exit := make(chan error, 1)
-	conn := s.currentConn()
+	connection := runner.currentConn()
 	go func() {
-		reasons <- s.readLoop(ctx, conn)
+		reasons <- runner.readLoop(ctx, connection)
 		exit <- nil
 	}()
 
-	s.drainRedial()
+	runner.drainRedial()
 
 	// Venues drop long-lived sockets on a schedule of their own — Binance at
 	// twenty-four hours. Going first is the difference between a handover and
 	// a gap: we choose the moment, the streams stay inside their TTL across
 	// it, and nobody has to discover the disconnect by not being sent data.
 	var aged <-chan time.Time
-	if s.p.opts.ConnMaxAge > 0 {
-		timer := time.NewTimer(s.p.opts.ConnMaxAge)
+	if runner.process.options.ConnMaxAge > 0 {
+		timer := time.NewTimer(runner.process.options.ConnMaxAge)
 		defer timer.Stop()
 		aged = timer.C
 	}
@@ -320,46 +320,46 @@ func (s *socketRunner) session(ctx context.Context) string {
 	select {
 	case reason = <-reasons:
 	case <-aged:
-		reason = "planned reconnect at max age " + s.p.opts.ConnMaxAge.String()
-		s.p.opts.Log.Info("reconnecting before the venue disconnects us",
-			"socket", s.plan.ID, "max_age", s.p.opts.ConnMaxAge.String())
-	case <-s.redial:
+		reason = "planned reconnect at max age " + runner.process.options.ConnMaxAge.String()
+		runner.process.options.Log.Info("reconnecting before the venue disconnects us",
+			"socket", runner.plan.ID, "max_age", runner.process.options.ConnMaxAge.String())
+	case <-runner.redial:
 		reason = "streams expired together"
-	case <-sctx.Done():
+	case <-sessionCtx.Done():
 		reason = "shutting down"
 	}
 
 	// Cancel, close, then wait — in that order, because a goroutine parked in
 	// Read never sees the cancel and closing is the only thing that frees it.
-	if err := StopGoroutine(cancel, s.closeConn, exit, s.p.opts.LeakTimeout); errors.Is(err, ErrLeaked) {
-		s.p.opts.Log.Error("socket read loop did not return, abandoning it",
-			"socket", s.plan.ID, "timeout", s.p.opts.LeakTimeout.String())
-		s.p.countLeak()
+	if err := StopGoroutine(cancel, runner.closeConn, exit, runner.process.options.LeakTimeout); errors.Is(err, ErrLeaked) {
+		runner.process.options.Log.Error("socket read loop did not return, abandoning it",
+			"socket", runner.plan.ID, "timeout", runner.process.options.LeakTimeout.String())
+		runner.process.countLeak()
 	}
 	return reason
 }
 
 // readLoop reads frames until one fails, returning why.
-func (s *socketRunner) readLoop(ctx context.Context, conn core.Conn) string {
-	if conn == nil {
+func (runner *socketRunner) readLoop(ctx context.Context, connection core.Conn) string {
+	if connection == nil {
 		return "connection closed"
 	}
 	for {
-		frame, recvNs, err := conn.Read(ctx)
+		frame, receivedNs, err := connection.Read(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
 				return "shutting down"
 			}
 			return "read: " + err.Error()
 		}
-		s.handleFrame(frame, recvNs)
+		runner.handleFrame(frame, receivedNs)
 	}
 }
 
 // drainRedial clears a stale escalation left over from the previous session.
-func (s *socketRunner) drainRedial() {
+func (runner *socketRunner) drainRedial() {
 	select {
-	case <-s.redial:
+	case <-runner.redial:
 	default:
 	}
 }
@@ -369,34 +369,34 @@ func (s *socketRunner) drainRedial() {
 // A frame that will not parse is counted, rate-limit logged and skipped. One
 // malformed frame is not a reason to go dark on every other stream, and the
 // keys it would have refreshed expire on their own and report themselves stale.
-func (s *socketRunner) handleFrame(frame []byte, recvNs int64) {
-	msgs, err := s.p.opts.Adapter.Parse(frame, recvNs)
+func (runner *socketRunner) handleFrame(frame []byte, receivedNs int64) {
+	messages, err := runner.process.options.Adapter.Parse(frame, receivedNs)
 	if err != nil {
-		s.p.countParseError(s.plan.ID, err)
+		runner.process.countParseError(runner.plan.ID, err)
 		return
 	}
-	if len(msgs) == 0 {
+	if len(messages) == 0 {
 		return // an ack, a pong or a heartbeat
 	}
 
 	// Recorded before publishing, so it is present even when Redis is refusing
 	// writes — which is exactly when it is worth reading. Every message is
 	// offered: the first is not necessarily the one carrying a send time.
-	for _, m := range msgs {
-		s.p.observeSkew(m)
+	for _, message := range messages {
+		runner.process.observeSkew(message)
 	}
 
-	counted := make(map[pb.Channel]bool, len(msgs))
-	for _, m := range msgs {
-		if !counted[m.Channel] {
-			counted[m.Channel] = true
-			s.p.opts.Metrics.WSFramesReceived.WithLabelValues(
-				s.p.opts.Venue,
-				core.MarketTypeName(m.Spec.Instrument.MarketType),
-				core.ChannelName(m.Channel)).Inc()
+	counted := make(map[manoochv1.Channel]bool, len(messages))
+	for _, message := range messages {
+		if !counted[message.Channel] {
+			counted[message.Channel] = true
+			runner.process.options.Metrics.WebSocketFramesReceived.WithLabelValues(
+				runner.process.options.Venue,
+				core.MarketTypeName(message.Specification.Instrument.MarketType),
+				core.ChannelName(message.Channel)).Inc()
 		}
-		if r := s.streams[m.Spec]; r != nil {
-			r.deliver(m)
+		if stream := runner.streams[message.Specification]; stream != nil {
+			stream.deliver(message)
 		}
 	}
 }
@@ -419,83 +419,83 @@ func (s *socketRunner) handleFrame(frame []byte, recvNs int64) {
 //
 // What is left is what the escalation is for: a socket that is connected, has
 // been for a while, and is delivering for nobody.
-func (s *socketRunner) noteExpiry(spec core.StreamSpec) {
-	s.mu.Lock()
-	now := s.p.now()
-	if s.conn == nil || now.Sub(s.connectedAt) < s.p.opts.ConnectGrace {
-		s.mu.Unlock()
+func (runner *socketRunner) noteExpiry(specification core.StreamSpec) {
+	runner.mutex.Lock()
+	now := runner.process.now()
+	if runner.connection == nil || now.Sub(runner.connectedAt) < runner.process.options.ConnectGrace {
+		runner.mutex.Unlock()
 		return
 	}
-	s.expiredAt[spec] = now
+	runner.expiredAt[specification] = now
 	n := 0
-	for k, at := range s.expiredAt {
-		if now.Sub(at) > s.p.opts.ExpiryWindow {
-			delete(s.expiredAt, k)
+	for k, at := range runner.expiredAt {
+		if now.Sub(at) > runner.process.options.ExpiryWindow {
+			delete(runner.expiredAt, k)
 			continue
 		}
 		n++
 	}
-	escalate := n >= s.quorum
+	escalate := n >= runner.quorum
 	if escalate {
-		clear(s.expiredAt)
+		clear(runner.expiredAt)
 	}
-	r := s.streams[spec]
-	s.mu.Unlock()
+	stream := runner.streams[specification]
+	runner.mutex.Unlock()
 
 	if escalate {
-		s.p.opts.Log.Error("streams expired together, redialing socket",
-			"socket", s.plan.ID, "expired", n, "quorum", s.quorum)
+		runner.process.options.Log.Error("streams expired together, redialing socket",
+			"socket", runner.plan.ID, "expired", n, "quorum", runner.quorum)
 		// Close first, because that is what a healthy read loop reacts to;
 		// then signal, so a read that does not come back is abandoned rather
 		// than leaving the socket wedged forever.
-		s.closeConn()
+		runner.closeConn()
 		select {
-		case s.redial <- struct{}{}:
+		case runner.redial <- struct{}{}:
 		default:
 		}
 		return
 	}
-	if r != nil {
-		r.restart()
+	if stream != nil {
+		stream.restart()
 	}
 }
 
 // setConn adopts a new connection. The expiries recorded against the previous
 // one are dropped with it: they were explained by the outage this connection
 // just ended.
-func (s *socketRunner) setConn(c core.Conn) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.conn = c
-	s.connectedAt = s.p.now()
-	clear(s.expiredAt)
+func (runner *socketRunner) setConn(connection core.Conn) {
+	runner.mutex.Lock()
+	defer runner.mutex.Unlock()
+	runner.connection = connection
+	runner.connectedAt = runner.process.now()
+	clear(runner.expiredAt)
 }
 
-func (s *socketRunner) currentConn() core.Conn {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.conn
+func (runner *socketRunner) currentConn() core.Conn {
+	runner.mutex.Lock()
+	defer runner.mutex.Unlock()
+	return runner.connection
 }
 
 // closeConn drops the connection and unblocks whatever is reading it. It is
 // safe to call from any goroutine and more than once.
-func (s *socketRunner) closeConn() {
-	s.mu.Lock()
-	c := s.conn
-	s.conn = nil
-	s.connectedAt = time.Time{}
-	s.mu.Unlock()
+func (runner *socketRunner) closeConn() {
+	runner.mutex.Lock()
+	connection := runner.connection
+	runner.connection = nil
+	runner.connectedAt = time.Time{}
+	runner.mutex.Unlock()
 
-	if c != nil {
-		_ = c.Close()
+	if connection != nil {
+		_ = connection.Close()
 	}
 }
 
 // stopStreams waits for every stream goroutine to finish. The session context
 // is already cancelled by the time it runs.
-func (s *socketRunner) stopStreams() {
-	for _, r := range s.order {
-		r.wait()
+func (runner *socketRunner) stopStreams() {
+	for _, stream := range runner.order {
+		stream.wait()
 	}
 }
 
@@ -508,100 +508,100 @@ func (s *socketRunner) stopStreams() {
 // thing the last-value cache it feeds does, and the alternative is publishing a
 // price that was already wrong when it was queued.
 type streamRunner struct {
-	s    *socketRunner
-	spec core.StreamSpec
-	wake chan struct{}
+	socket        *socketRunner
+	specification core.StreamSpec
+	wake          chan struct{}
 
-	mu      sync.Mutex
+	mutex   sync.Mutex
 	pending *core.Message
 	task    *Task
 }
 
 // start launches the goroutine under supervision for one session.
-func (r *streamRunner) start(ctx context.Context) {
-	t := Start(ctx, TaskOptions{
-		Name:        r.spec.String(),
-		Run:         r.run,
-		LeakTimeout: r.s.p.opts.LeakTimeout,
-		Backoff:     r.s.p.opts.StreamBackoff,
-		Log:         r.s.p.opts.Log,
-		OnExit:      r.onExit,
+func (runner *streamRunner) start(ctx context.Context) {
+	task := Start(ctx, TaskOptions{
+		Name:        runner.specification.String(),
+		Run:         runner.run,
+		LeakTimeout: runner.socket.process.options.LeakTimeout,
+		Backoff:     runner.socket.process.options.StreamBackoff,
+		Log:         runner.socket.process.options.Log,
+		OnExit:      runner.onExit,
 		// No Unblock: this goroutine parks on its own channels and its
 		// context, never on the socket, so cancelling is enough to free it.
 		// The socket's connection is closed by the session, once, rather than
 		// by each of the streams that share it.
 	})
-	r.mu.Lock()
-	r.task = t
-	r.mu.Unlock()
+	runner.mutex.Lock()
+	runner.task = task
+	runner.mutex.Unlock()
 }
 
 // wait blocks until the goroutine has stopped being supervised.
-func (r *streamRunner) wait() {
-	r.mu.Lock()
-	t := r.task
-	r.mu.Unlock()
-	if t != nil {
-		t.Wait()
+func (runner *streamRunner) wait() {
+	runner.mutex.Lock()
+	task := runner.task
+	runner.mutex.Unlock()
+	if task != nil {
+		task.Wait()
 	}
 }
 
 // restart is tier 1: relaunch this stream's goroutine and nothing else.
-func (r *streamRunner) restart() {
-	r.mu.Lock()
-	t := r.task
-	r.mu.Unlock()
-	if t == nil {
+func (runner *streamRunner) restart() {
+	runner.mutex.Lock()
+	task := runner.task
+	runner.mutex.Unlock()
+	if task == nil {
 		return
 	}
-	r.s.p.opts.Health.StreamRestarted(r.spec)
-	t.Restart()
+	runner.socket.process.options.Health.StreamRestarted(runner.specification)
+	task.Restart()
 }
 
 // onExit counts a leaked goroutine. There is no self-kill, so leaks accumulate;
 // holding the venue at DEGRADED is what makes one impossible to miss.
-func (r *streamRunner) onExit(err error) {
+func (runner *streamRunner) onExit(err error) {
 	if !errors.Is(err, ErrLeaked) {
 		return
 	}
-	r.s.p.countLeak()
+	runner.socket.process.countLeak()
 }
 
 // run publishes whatever the read loop hands over, until its context ends.
-func (r *streamRunner) run(ctx context.Context) error {
+func (runner *streamRunner) run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-r.wake:
-			m := r.take()
-			if m == nil {
+		case <-runner.wake:
+			message := runner.take()
+			if message == nil {
 				continue
 			}
-			r.publish(ctx, *m)
+			runner.publish(ctx, *message)
 		}
 	}
 }
 
 // deliver hands the newest message to the goroutine without blocking the read
 // loop: one slow stream must not stall the socket every other stream shares.
-func (r *streamRunner) deliver(m core.Message) {
-	r.mu.Lock()
-	r.pending = &m
-	r.mu.Unlock()
+func (runner *streamRunner) deliver(message core.Message) {
+	runner.mutex.Lock()
+	runner.pending = &message
+	runner.mutex.Unlock()
 
 	select {
-	case r.wake <- struct{}{}:
+	case runner.wake <- struct{}{}:
 	default:
 	}
 }
 
-func (r *streamRunner) take() *core.Message {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	m := r.pending
-	r.pending = nil
-	return m
+func (runner *streamRunner) take() *core.Message {
+	runner.mutex.Lock()
+	defer runner.mutex.Unlock()
+	message := runner.pending
+	runner.pending = nil
+	return message
 }
 
 // publish stamps the status the tracker computed and writes the message.
@@ -609,48 +609,48 @@ func (r *streamRunner) take() *core.Message {
 // A failed write is counted and rate-limit logged by the publisher and is not
 // escalated here: the key then expires on its own, which is the trigger the
 // fallback and the restart tiers are both built on.
-func (r *streamRunner) publish(ctx context.Context, m core.Message) {
-	p := r.s.p
+func (runner *streamRunner) publish(ctx context.Context, message core.Message) {
+	process := runner.socket.process
 
 	// Fallback first: this message is the evidence the socket is delivering
 	// again, and asking for a status before disengaging would report the
 	// stream as still on REST.
-	if p.opts.OnMessage != nil {
-		p.opts.OnMessage(m.Spec)
+	if process.options.OnMessage != nil {
+		process.options.OnMessage(message.Specification)
 	}
-	p.opts.Health.Received(m.Spec)
+	process.options.Health.Received(message.Specification)
 
-	env := envelopeOf(m.Proto)
-	if env == nil {
-		p.opts.Log.Error("message carries no envelope", "stream", m.Spec.String())
+	envelope := envelopeOf(message.Proto)
+	if envelope == nil {
+		process.options.Log.Error("message carries no envelope", "stream", message.Specification.String())
 		return
 	}
 	// Never publish data without a status, and never one the adapter guessed:
 	// the adapter knows the frame parsed, not whether the socket behind it is
 	// healthy.
-	env.Status, env.StatusReason = p.opts.Health.Status(m.Spec)
+	envelope.Status, envelope.StatusReason = process.options.Health.Status(message.Specification)
 
-	_ = p.opts.Publisher.Publish(ctx, m.Key, m.Proto, m.TTL)
+	_ = process.options.Publisher.Publish(ctx, message.Key, message.Proto, message.TimeToLive)
 }
 
 // ---------- process-level accounting ----------
 
 // countLeak increments the leaked goroutine count and pushes it into health,
 // which holds the venue at DEGRADED for as long as it is above zero.
-func (p *Process) countLeak() {
-	p.mu.Lock()
-	p.leaked++
-	n := p.leaked
-	p.mu.Unlock()
+func (process *Process) countLeak() {
+	process.mutex.Lock()
+	process.leaked++
+	n := process.leaked
+	process.mutex.Unlock()
 
-	p.opts.Health.Leaked(n)
+	process.options.Health.Leaked(n)
 }
 
 // Leaked is how many goroutines have failed to return within the timeout.
-func (p *Process) Leaked() int {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.leaked
+func (process *Process) Leaked() int {
+	process.mutex.Lock()
+	defer process.mutex.Unlock()
+	return process.leaked
 }
 
 // observeSkew records the venue's clock against ours. A venue clock ahead of
@@ -662,49 +662,50 @@ func (p *Process) Leaked() int {
 // settlement instant it describes, which is hours old by the time it is pushed
 // — would read as a four-hour clock skew and take a perfectly healthy venue to
 // STALE once a minute.
-func (p *Process) observeSkew(m core.Message) {
-	env := envelopeOf(m.Proto)
-	if env == nil || !env.ExchangeTimeIsSendTime || env.ExchangeTimeNs <= 0 || env.RecvTimeNs <= 0 {
+func (process *Process) observeSkew(message core.Message) {
+	envelope := envelopeOf(message.Proto)
+	if envelope == nil || !envelope.ExchangeTimeIsSendTime || envelope.ExchangeTimeNs <= 0 || envelope.RecvTimeNs <= 0 {
 		return
 	}
-	p.opts.Health.ClockSkew((env.ExchangeTimeNs - env.RecvTimeNs) / int64(time.Millisecond))
+	process.options.Health.ClockSkew((envelope.ExchangeTimeNs - envelope.RecvTimeNs) / int64(time.Millisecond))
 }
 
 // countParseError classifies a rejected frame from the error itself rather than
 // by matching strings, and counts a range rejection separately: it is the one
 // parse failure that would otherwise have published a plausible wrong price.
-func (p *Process) countParseError(socketID string, err error) {
-	kind, channel := "unclassified", core.ChannelName(pb.Channel_CHANNEL_UNSPECIFIED)
+func (process *Process) countParseError(socketID string, err error) {
+	kind, channel := "unclassified", core.ChannelName(manoochv1.Channel_CHANNEL_UNSPECIFIED)
 
-	var pe *core.ParseError
-	if errors.As(err, &pe) {
-		kind = pe.Kind
-		channel = core.ChannelName(pe.Channel)
+	var parseError *core.ParseError
+	if errors.As(err, &parseError) {
+		kind = parseError.Kind
+		channel = core.ChannelName(parseError.Channel)
 	}
-	p.opts.Metrics.ParseErrors.WithLabelValues(p.opts.Venue, channel, kind).Inc()
+	process.options.Metrics.ParseErrors.WithLabelValues(process.options.Venue, channel, kind).Inc()
 	if kind == core.KindRange {
-		p.opts.Metrics.RangeErrors.WithLabelValues(p.opts.Venue, channel).Inc()
+		process.options.Metrics.RangeErrors.WithLabelValues(process.options.Venue, channel).Inc()
 	}
-	p.opts.Health.FrameRejected(socketID)
+	process.options.Health.FrameRejected(socketID)
 
-	now := p.now()
-	p.mu.Lock()
-	log := now.Sub(p.lastParseLog) >= parseErrLogInterval
+	now := process.now()
+	process.mutex.Lock()
+	log := now.Sub(process.lastParseLog) >= parseErrorLogInterval
 	if log {
-		p.lastParseLog = now
+		process.lastParseLog = now
 	}
-	p.mu.Unlock()
+	process.mutex.Unlock()
 
 	if log {
-		p.opts.Log.Warn("frame not parsed", "socket", socketID, "kind", kind, "channel", channel, "error", err.Error())
+		process.options.Log.Warn("frame not parsed", "socket", socketID, "kind", kind, "channel", channel, "error", err.Error())
 	}
 }
 
-// envelopeOf reaches the envelope every payload in the schema carries in field 1.
-func envelopeOf(m proto.Message) *pb.Envelope {
-	e, ok := m.(interface{ GetEnv() *pb.Envelope })
+// envelopeOf reaches the envelope every payload in the schema carries in field
+// 1.
+func envelopeOf(m proto.Message) *manoochv1.Envelope {
+	enveloped, ok := m.(interface{ GetEnv() *manoochv1.Envelope })
 	if !ok {
 		return nil
 	}
-	return e.GetEnv()
+	return enveloped.GetEnv()
 }

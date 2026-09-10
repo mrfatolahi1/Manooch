@@ -21,7 +21,7 @@ only. **No credential, no signature, no authenticated stream, no order path.**
 | `Venue` | `"BINANCE"` |
 | `MarketType` | `PERP_LINEAR`, the only market served |
 | `Channels` | The three a frame produces, in the order `Parse` emits them |
-| `Options` | Endpoints, overrides, per-socket limit, read timeout, per-channel TTLs, limiter, dialer, `HTTPTimeout` |
+| `Options` | Endpoints, overrides, per-socket limit, read timeout, per-channel time-to-live values, limiter, dialer, `HTTPTimeout` |
 | `New(Options)` | Builds the adapter; opens nothing |
 | `Adapter` | Implements `core.Adapter` |
 | `SocketURL(plan)` | The combined-stream URL a plan dials |
@@ -67,7 +67,7 @@ being true for every symbol.
 | Quirk | How it is absorbed |
 |---|---|
 | No sequence number | `venue_seq_present = false`, `venue_seq` zero. An invented one would let a consumer believe it can detect venue-side gaps here. |
-| Millisecond timestamps | `msToNs` on every timestamp; `quirks.timestamp_unit: ms` records it. |
+| Millisecond timestamps | `millisecondsToNanoseconds` on every timestamp; `quirks.timestamp_unit: ms` records it. |
 | Symbol mapping | Strip the `_`: `BTC_USDT` → `BTCUSDT`. `symbol_overrides` wins where that is wrong. Reversing uses a longest-first quote list. |
 | Dated contracts share the endpoint | A symbol containing `_` (`BTCUSDT_240329`) is rejected. Its price is not a perpetual's. |
 | Empty funding rate | `r: ""` skips the funding message and still emits mark and index. Zero is a real rate; empty is missing data. |

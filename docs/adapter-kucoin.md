@@ -22,7 +22,7 @@ makes to open the venue's own chart page.
 | `Venue` | `"KUCOIN"` |
 | `MarketType` | `PERP_LINEAR`, the only market served |
 | `Channels` | The three this adapter produces |
-| `Options` | Endpoints, overrides, per-socket limit, per-channel TTLs, limiter, dialer, `ConnectID`, `SubscribeTimeout`, `HTTPTimeout` |
+| `Options` | Endpoints, overrides, per-socket limit, per-channel time-to-live values, limiter, dialer, `ConnectID`, `SubscribeTimeout`, `HTTPTimeout` |
 | `New(Options)` | Builds the adapter; opens nothing and fetches no token |
 | `Adapter` | Implements `core.Adapter` |
 

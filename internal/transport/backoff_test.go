@@ -20,8 +20,8 @@ func policy() transport.Policy {
 
 // TestDelayGrowsAndCaps: the ceiling doubles per attempt and stops at Max.
 func TestDelayGrowsAndCaps(t *testing.T) {
-	p := policy()
-	p.Jitter = transport.JitterNone
+	policy := policy()
+	policy.Jitter = transport.JitterNone
 
 	for attempt, want := range map[int]time.Duration{
 		0: 500 * time.Millisecond,
@@ -29,9 +29,9 @@ func TestDelayGrowsAndCaps(t *testing.T) {
 		2: 2 * time.Second,
 		7: 64 * time.Second, // past Max
 	} {
-		got := p.Delay(attempt)
-		if want > p.Max {
-			want = p.Max
+		got := policy.Delay(attempt)
+		if want > policy.Max {
+			want = policy.Max
 		}
 		if got != want {
 			t.Errorf("Delay(%d) = %v, want %v", attempt, got, want)
@@ -43,25 +43,25 @@ func TestDelayGrowsAndCaps(t *testing.T) {
 // initial × 2^attempt to wrap int64 nanoseconds. A negative delay is a retry
 // with no wait, which is the storm the whole policy exists to prevent.
 func TestDelayNeverOverflows(t *testing.T) {
-	p := policy()
-	p.Jitter = transport.JitterNone
+	policy := policy()
+	policy.Jitter = transport.JitterNone
 
 	for _, attempt := range []int{63, 64, 1000, math.MaxInt32} {
-		if got := p.Delay(attempt); got != p.Max {
-			t.Errorf("Delay(%d) = %v, want %v", attempt, got, p.Max)
+		if got := policy.Delay(attempt); got != policy.Max {
+			t.Errorf("Delay(%d) = %v, want %v", attempt, got, policy.Max)
 		}
 	}
 }
 
 // TestFullJitterStaysInRange: every delay is in [0, ceiling].
 func TestFullJitterStaysInRange(t *testing.T) {
-	p := policy()
+	policy := policy()
 	ceiling := 2 * time.Second // attempt 2
 
 	for range 10_000 {
-		d := p.Delay(2)
-		if d < 0 || d > ceiling {
-			t.Fatalf("Delay(2) = %v, want within [0, %v]", d, ceiling)
+		duration := policy.Delay(2)
+		if duration < 0 || duration > ceiling {
+			t.Fatalf("Delay(2) = %v, want within [0, %v]", duration, ceiling)
 		}
 	}
 }
@@ -71,12 +71,12 @@ func TestFullJitterStaysInRange(t *testing.T) {
 // on the same frame, which is a reconnect storm and the usual way an IP gets
 // banned.
 func TestFullJitterSpreadsConcurrentFailures(t *testing.T) {
-	p := policy()
+	policy := policy()
 
 	const streams = 200
 	seen := make(map[time.Duration]int, streams)
 	for range streams {
-		seen[p.Delay(4)]++
+		seen[policy.Delay(4)]++
 	}
 	// Well under 200 to leave room for coincidence, but far above the 1 that
 	// no jitter or a shared seed would produce.
@@ -85,26 +85,26 @@ func TestFullJitterSpreadsConcurrentFailures(t *testing.T) {
 	}
 
 	// And they actually spread across the interval rather than clustering.
-	var lo, hi time.Duration = time.Hour, 0
-	for d := range seen {
-		lo, hi = min(lo, d), max(hi, d)
+	var lowest, highest time.Duration = time.Hour, 0
+	for duration := range seen {
+		lowest, highest = min(lowest, duration), max(highest, duration)
 	}
-	if ceiling := 8 * time.Second; hi-lo < ceiling/2 {
-		t.Errorf("delays span only %v of a %v interval", hi-lo, ceiling)
+	if ceiling := 8 * time.Second; highest-lowest < ceiling/2 {
+		t.Errorf("delays span only %v of a %v interval", highest-lowest, ceiling)
 	}
 }
 
 // TestEqualJitterKeepsHalf: the mode is offered because config allows it, so
 // its bound is asserted rather than assumed.
 func TestEqualJitterKeepsHalf(t *testing.T) {
-	p := policy()
-	p.Jitter = transport.JitterEqual
+	policy := policy()
+	policy.Jitter = transport.JitterEqual
 	ceiling := 2 * time.Second
 
 	for range 1000 {
-		d := p.Delay(2)
-		if d < ceiling/2 || d > ceiling {
-			t.Fatalf("Delay(2) = %v, want within [%v, %v]", d, ceiling/2, ceiling)
+		duration := policy.Delay(2)
+		if duration < ceiling/2 || duration > ceiling {
+			t.Fatalf("Delay(2) = %v, want within [%v, %v]", duration, ceiling/2, ceiling)
 		}
 	}
 }
@@ -112,11 +112,11 @@ func TestEqualJitterKeepsHalf(t *testing.T) {
 // TestUnknownJitterIsFull: an unset or misspelt mode must not silently become
 // no jitter, which is the one setting that causes the failure being avoided.
 func TestUnknownJitterIsFull(t *testing.T) {
-	p := policy()
-	p.Jitter = ""
-	p.Rand = func() float64 { return 0.25 }
+	policy := policy()
+	policy.Jitter = ""
+	policy.Rand = func() float64 { return 0.25 }
 
-	if got, want := p.Delay(1), 250*time.Millisecond; got != want {
+	if got, want := policy.Delay(1), 250*time.Millisecond; got != want {
 		t.Errorf("Delay(1) with no jitter mode = %v, want %v (full jitter)", got, want)
 	}
 }
@@ -124,8 +124,8 @@ func TestUnknownJitterIsFull(t *testing.T) {
 // TestZeroPolicyDoesNotSleep: a Policy nobody configured must retry immediately
 // rather than block forever on a zero Initial.
 func TestZeroPolicyDoesNotSleep(t *testing.T) {
-	var p transport.Policy
-	if got := p.Delay(5); got != 0 {
+	var policy transport.Policy
+	if got := policy.Delay(5); got != 0 {
 		t.Errorf("Delay(5) on a zero policy = %v, want 0", got)
 	}
 }

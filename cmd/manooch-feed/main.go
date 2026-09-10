@@ -25,7 +25,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/you/manooch/internal/adapter"
 	"github.com/you/manooch/internal/config"
-	"github.com/you/manooch/internal/obs"
+	"github.com/you/manooch/internal/observability"
 	"github.com/you/manooch/internal/publish"
 	"gopkg.in/yaml.v3"
 )
@@ -49,43 +49,43 @@ type flags struct {
 }
 
 func parseFlags() (flags, error) {
-	var f flags
-	flag.StringVar(&f.exchange, "exchange", "", "venue to run, upper case (required)")
-	flag.StringVar(&f.configDir, "config", "./config", "directory holding defaults.yaml and venues/")
-	flag.BoolVar(&f.validate, "validate", false, "load and validate config, print the resolved config, exit")
+	var flags flags
+	flag.StringVar(&flags.exchange, "exchange", "", "venue to run, upper case (required)")
+	flag.StringVar(&flags.configDir, "config", "./config", "directory holding defaults.yaml and venues/")
+	flag.BoolVar(&flags.validate, "validate", false, "load and validate config, print the resolved config, exit")
 	flag.Parse()
 
-	if f.exchange == "" {
-		return f, errors.New("--exchange is required")
+	if flags.exchange == "" {
+		return flags, errors.New("--exchange is required")
 	}
-	if f.exchange != strings.ToUpper(f.exchange) {
-		return f, fmt.Errorf("--exchange must be upper case, got %q", f.exchange)
+	if flags.exchange != strings.ToUpper(flags.exchange) {
+		return flags, fmt.Errorf("--exchange must be upper case, got %q", flags.exchange)
 	}
-	return f, nil
+	return flags, nil
 }
 
 func run() error {
-	f, err := parseFlags()
+	flags, err := parseFlags()
 	if err != nil {
 		return err
 	}
 
-	cfg, err := config.Load(f.configDir, f.exchange)
+	configuration, err := config.Load(flags.configDir, flags.exchange)
 	if err != nil {
 		return err
 	}
 
 	// Opens nothing — no Redis connection, no listener — so it is safe to run
 	// against production config from anywhere.
-	if f.validate {
-		return printResolved(os.Stdout, cfg, f.configDir)
+	if flags.validate {
+		return printResolved(os.Stdout, configuration, flags.configDir)
 	}
 
-	logger, err := obs.NewLogger(os.Stdout, cfg.Service.LogLevel, cfg.Venue)
+	logger, err := observability.NewLogger(os.Stdout, configuration.Service.LogLevel, configuration.Venue)
 	if err != nil {
 		return err
 	}
-	metrics := obs.NewMetrics()
+	metrics := observability.NewMetrics()
 
 	// Once per process. publish_seq restarts at zero on every start, so without
 	// this a consumer cannot tell a restart from messages dropped on the bus.
@@ -94,13 +94,13 @@ func run() error {
 
 	logger.Info("starting",
 		"instance_id", instanceID,
-		"config_dir", f.configDir,
-		"enabled", cfg.Enabled,
-		"streams", len(cfg.Streams()))
+		"config_dir", flags.configDir,
+		"enabled", configuration.Enabled,
+		"streams", len(configuration.Streams()))
 
 	// Resolved before anything is opened, so an unknown venue or an unservable
 	// stream fails with no Redis connection and no bound port behind it.
-	prod, err := planProducers(cfg, logger)
+	producerSet, err := planProducers(configuration, logger)
 	if err != nil {
 		return err
 	}
@@ -108,46 +108,46 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	pub, err := dialRedis(ctx, cfg, instanceID, metrics, logger)
+	publisher, err := dialRedis(ctx, configuration, instanceID, metrics, logger)
 	if err != nil {
 		return err
 	}
-	logger.Info("redis connected", "addr", cfg.Redis.Addr, "db", cfg.Redis.DB)
+	logger.Info("redis connected", "addr", configuration.Redis.Addr, "db", configuration.Redis.Database)
 
-	srv, err := serveAdmin(cfg, metrics, instanceID, started, logger)
+	server, err := serveAdmin(configuration, metrics, instanceID, started, logger)
 	if err != nil {
-		pub.Close()
+		publisher.Close()
 		return err
 	}
 
-	producers, err := prod.start(ctx, cfg, pub, metrics, logger)
+	runningProducers, err := producerSet.start(ctx, configuration, publisher, metrics, logger)
 	if err != nil {
-		shutdown(srv, pub, &sync.WaitGroup{}, cfg, metrics, logger)
+		shutdown(server, publisher, &sync.WaitGroup{}, configuration, metrics, logger)
 		return err
 	}
 
 	<-ctx.Done()
 	logger.Info("shutting down")
-	shutdown(srv, pub, producers, cfg, metrics, logger)
+	shutdown(server, publisher, runningProducers, configuration, metrics, logger)
 	logger.Info("stopped")
 	return nil
 }
 
 // dialRedis connects the publisher, bounded by the configured dial timeout.
 // Redis is not optional: a feed that cannot publish has nothing to do.
-func dialRedis(ctx context.Context, cfg *config.Config, instanceID string, metrics *obs.Metrics, logger *slog.Logger) (*publish.RedisPublisher, error) {
-	dialCtx, cancel := context.WithTimeout(ctx, cfg.Redis.DialTimeout.Std())
+func dialRedis(ctx context.Context, configuration *config.Config, instanceID string, metrics *observability.Metrics, logger *slog.Logger) (*publish.RedisPublisher, error) {
+	dialCtx, cancel := context.WithTimeout(ctx, configuration.Redis.DialTimeout.Standard())
 	defer cancel()
 
 	return publish.NewRedis(dialCtx, publish.Options{
-		Addr:          cfg.Redis.Addr,
-		DB:            cfg.Redis.DB,
-		DialTimeout:   cfg.Redis.DialTimeout.Std(),
-		ReadTimeout:   cfg.Redis.ReadTimeout.Std(),
-		PoolSize:      cfg.Redis.PoolSize,
-		Venue:         cfg.Venue,
+		Addr:          configuration.Redis.Addr,
+		Database:      configuration.Redis.Database,
+		DialTimeout:   configuration.Redis.DialTimeout.Standard(),
+		ReadTimeout:   configuration.Redis.ReadTimeout.Standard(),
+		PoolSize:      configuration.Redis.PoolSize,
+		Venue:         configuration.Venue,
 		InstanceID:    instanceID,
-		SchemaVersion: cfg.Publish.SchemaVersion,
+		SchemaVersion: configuration.Publish.SchemaVersion,
 		Metrics:       metrics,
 		Logger:        logger,
 	})
@@ -158,37 +158,37 @@ func dialRedis(ctx context.Context, cfg *config.Config, instanceID string, metri
 //
 // The listener is opened synchronously: otherwise a port clash is a log line in
 // a process that keeps running with no metrics and no /healthz.
-func serveAdmin(cfg *config.Config, metrics *obs.Metrics, instanceID string, started time.Time, logger *slog.Logger) (*http.Server, error) {
-	if !cfg.Service.HTTP.Enabled {
+func serveAdmin(configuration *config.Config, metrics *observability.Metrics, instanceID string, started time.Time, logger *slog.Logger) (*http.Server, error) {
+	if !configuration.Service.HTTP.Enabled {
 		return nil, nil
 	}
 
-	ln, err := net.Listen("tcp", cfg.Service.HTTP.Listen)
+	listener, err := net.Listen("tcp", configuration.Service.HTTP.Listen)
 	if err != nil {
 		return nil, fmt.Errorf("http listen: %w", err)
 	}
-	srv := &http.Server{
-		Handler:           newMux(metrics, cfg.Venue, instanceID, started),
+	server := &http.Server{
+		Handler:           newMux(metrics, configuration.Venue, instanceID, started),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	go func() {
-		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("http server stopped", "error", err.Error())
 		}
 	}()
-	logger.Info("http listening", "addr", ln.Addr().String())
-	return srv, nil
+	logger.Info("http listening", "addr", listener.Addr().String())
+	return server, nil
 }
 
 // shutdown stops everything under one deadline. Redis closes last, after the
 // producers have drained, so their in-flight publishes do not fail on the way
 // out and log an error that means nothing.
-func shutdown(srv *http.Server, pub *publish.RedisPublisher, producers *sync.WaitGroup, cfg *config.Config, metrics *obs.Metrics, logger *slog.Logger) {
+func shutdown(server *http.Server, publisher *publish.RedisPublisher, producers *sync.WaitGroup, configuration *config.Config, metrics *observability.Metrics, logger *slog.Logger) {
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownDeadline)
 	defer cancel()
 
-	if srv != nil {
-		if err := srv.Shutdown(ctx); err != nil {
+	if server != nil {
+		if err := server.Shutdown(ctx); err != nil {
 			logger.Error("http shutdown", "error", err.Error())
 		}
 	}
@@ -202,10 +202,10 @@ func shutdown(srv *http.Server, pub *publish.RedisPublisher, producers *sync.Wai
 		// will contend with. Counted rather than set: the health tracker owns
 		// this gauge and may already have leaks of its own on it.
 		logger.Error("shutdown deadline exceeded, goroutines still running")
-		metrics.LeakedGoroutines.WithLabelValues(cfg.Venue).Inc()
+		metrics.LeakedGoroutines.WithLabelValues(configuration.Venue).Inc()
 	}
 
-	if err := pub.Close(); err != nil {
+	if err := publisher.Close(); err != nil {
 		logger.Error("redis close", "error", err.Error())
 	}
 }
@@ -219,32 +219,32 @@ func shutdown(srv *http.Server, pub *publish.RedisPublisher, producers *sync.Wai
 // XBTUSDTM on KuCoin — and a printout that guessed would be an operator
 // checking their config against a symbol nothing will ever subscribe to.
 // Building the adapter opens nothing, so this stays safe to run anywhere.
-func printResolved(w *os.File, cfg *config.Config, dir string) error {
-	out, err := yaml.Marshal(cfg)
+func printResolved(file *os.File, configuration *config.Config, dir string) error {
+	out, err := yaml.Marshal(configuration)
 	if err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(w, "# resolved configuration for %s from %s\n\n%s", cfg.Venue, dir, out); err != nil {
+	if _, err := fmt.Fprintf(file, "# resolved configuration for %s from %s\n\n%s", configuration.Venue, dir, out); err != nil {
 		return err
 	}
 
-	a, err := adapter.New(cfg, adapter.Deps{})
+	venueAdapter, err := adapter.New(configuration, adapter.Dependencies{})
 	if err != nil {
 		return err
 	}
-	specs, err := adapter.Specs(cfg)
+	specifications, err := adapter.Specifications(configuration)
 	if err != nil {
 		return err
 	}
 
-	fmt.Fprintf(w, "\n# %d streams\n", len(specs))
-	for _, spec := range specs {
-		venueSymbol, err := a.VenueSymbol(spec.Instrument)
+	fmt.Fprintf(file, "\n# %d streams\n", len(specifications))
+	for _, specification := range specifications {
+		venueSymbol, err := venueAdapter.VenueSymbol(specification.Instrument)
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(w, "# %-52s venue_symbol=%s\n",
-			publish.Key(cfg.Venue, spec.Instrument.MarketType, spec.Instrument.Canonical(), spec.Channel),
+		fmt.Fprintf(file, "# %-52s venue_symbol=%s\n",
+			publish.Key(configuration.Venue, specification.Instrument.MarketType, specification.Instrument.Canonical(), specification.Channel),
 			venueSymbol)
 	}
 	return nil

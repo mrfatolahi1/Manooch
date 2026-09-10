@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/you/manooch/gen/manoochv1"
+	"github.com/you/manooch/gen/manoochv1"
 	"github.com/you/manooch/internal/adapter/adaptertest"
 	"github.com/you/manooch/internal/adapter/binance"
 	"github.com/you/manooch/internal/core"
@@ -25,32 +25,32 @@ var fixtureDir = filepath.Join("..", "..", "..", "testdata", "binance")
 func newAdapter(t *testing.T) *binance.Adapter {
 	t.Helper()
 
-	a, err := binance.New(binance.Options{
-		WSEndpoint:          "wss://fstream.binance.com/stream",
+	adapter, err := binance.New(binance.Options{
+		WebSocketEndpoint:   "wss://fstream.binance.com/stream",
 		RESTEndpoint:        "https://fapi.binance.com",
 		SymbolOverrides:     map[string]string{"BTC_USDT": "BTCUSDT"},
 		MaxStreamsPerSocket: 100,
 		ReadTimeout:         60 * time.Second,
-		TTLs: map[pb.Channel]time.Duration{
-			pb.Channel_CHANNEL_MARK_PRICE:  3 * time.Second,
-			pb.Channel_CHANNEL_INDEX_PRICE: 3 * time.Second,
-			pb.Channel_CHANNEL_FUNDING:     3 * time.Second,
+		TimeToLive: map[manoochv1.Channel]time.Duration{
+			manoochv1.Channel_CHANNEL_MARK_PRICE:  3 * time.Second,
+			manoochv1.Channel_CHANNEL_INDEX_PRICE: 3 * time.Second,
+			manoochv1.Channel_CHANNEL_FUNDING:     3 * time.Second,
 		},
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	return a
+	return adapter
 }
 
-func spec(t *testing.T, symbol string, ch pb.Channel) core.StreamSpec {
+func specification(t *testing.T, symbol string, channel manoochv1.Channel) core.StreamSpec {
 	t.Helper()
 
-	ref, err := core.ParseCanonical(symbol, binance.MarketType)
+	reference, err := core.ParseCanonical(symbol, binance.MarketType)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return core.StreamSpec{Instrument: ref, Channel: ch}
+	return core.StreamSpec{Instrument: reference, Channel: channel}
 }
 
 // TestConformance is the shared suite. A second venue calls the same function
@@ -64,17 +64,17 @@ func TestConformance(t *testing.T) {
 // price and funding all arrive together and land on three separate keys, each
 // with its own envelope so the publisher can sequence them independently.
 func TestOneFrameIsThreeMessages(t *testing.T) {
-	a := newAdapter(t)
+	adapter := newAdapter(t)
 	frame := []byte(`{"stream":"btcusdt@markPrice@1s","data":{"e":"markPriceUpdate",` +
 		`"E":1562305380000,"s":"BTCUSDT","p":"11794.15000000","i":"11784.62659091",` +
 		`"P":"11784.25641265","r":"0.00038167","T":1562306400000}}`)
 
-	msgs, err := a.Parse(frame, adaptertest.RecvNs)
+	messages, err := adapter.Parse(frame, adaptertest.ReceivedNs)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	if len(msgs) != 3 {
-		t.Fatalf("Parse produced %d messages, want 3", len(msgs))
+	if len(messages) != 3 {
+		t.Fatalf("Parse produced %d messages, want 3", len(messages))
 	}
 
 	wantKeys := []string{
@@ -83,43 +83,43 @@ func TestOneFrameIsThreeMessages(t *testing.T) {
 		"Manooch:BINANCE:PERP_LINEAR:BTC_USDT:funding",
 	}
 	for i, want := range wantKeys {
-		if msgs[i].Key != want {
-			t.Errorf("message %d key = %q, want %q", i, msgs[i].Key, want)
+		if messages[i].Key != want {
+			t.Errorf("message %d key = %q, want %q", i, messages[i].Key, want)
 		}
 	}
 
 	// Milliseconds converted to nanoseconds, shared across all three.
 	const wantExchangeNs = 1562305380000 * int64(time.Millisecond)
-	for i, m := range msgs {
-		env := m.Proto.(interface{ GetEnv() *pb.Envelope }).GetEnv()
-		if env.ExchangeTimeNs != wantExchangeNs {
-			t.Errorf("message %d exchange_time_ns = %d, want %d", i, env.ExchangeTimeNs, wantExchangeNs)
+	for i, message := range messages {
+		envelope := message.Proto.(interface{ GetEnv() *manoochv1.Envelope }).GetEnv()
+		if envelope.ExchangeTimeNs != wantExchangeNs {
+			t.Errorf("message %d exchange_time_ns = %d, want %d", i, envelope.ExchangeTimeNs, wantExchangeNs)
 		}
-		if env.Source != pb.Source_SOURCE_WEBSOCKET {
-			t.Errorf("message %d source = %v", i, env.Source)
+		if envelope.Source != manoochv1.Source_SOURCE_WEBSOCKET {
+			t.Errorf("message %d source = %v", i, envelope.Source)
 		}
-		if env.VenueSeqPresent {
+		if envelope.VenueSeqPresent {
 			t.Errorf("message %d claims a venue sequence; this stream carries none", i)
 		}
 	}
 
 	// Each message needs its own envelope: one shared pointer would have the
 	// publisher stamp the same publish_seq into all three.
-	e0 := msgs[0].Proto.(interface{ GetEnv() *pb.Envelope }).GetEnv()
-	e1 := msgs[1].Proto.(interface{ GetEnv() *pb.Envelope }).GetEnv()
-	if e0 == e1 {
+	firstEnvelope := messages[0].Proto.(interface{ GetEnv() *manoochv1.Envelope }).GetEnv()
+	secondEnvelope := messages[1].Proto.(interface{ GetEnv() *manoochv1.Envelope }).GetEnv()
+	if firstEnvelope == secondEnvelope {
 		t.Error("two messages share one envelope")
 	}
 
-	mark := msgs[0].Proto.(*pb.MarkPrice)
+	mark := messages[0].Proto.(*manoochv1.MarkPrice)
 	if got := price.Price(mark.MarkPrice).String(); got != "11794.15" {
 		t.Errorf("mark price = %s, want 11794.15", got)
 	}
-	index := msgs[1].Proto.(*pb.IndexPrice)
+	index := messages[1].Proto.(*manoochv1.IndexPrice)
 	if got := price.Price(index.IndexPrice).String(); got != "11784.62659091" {
 		t.Errorf("index price = %s, want 11784.62659091", got)
 	}
-	funding := msgs[2].Proto.(*pb.Funding)
+	funding := messages[2].Proto.(*manoochv1.Funding)
 	if got := price.Rate(funding.FundingRate).String(); got != "0.00038167" {
 		t.Errorf("funding rate = %s, want 0.00038167", got)
 	}
@@ -132,19 +132,19 @@ func TestOneFrameIsThreeMessages(t *testing.T) {
 // missing data. Publishing "" as 0 would put a number a strategy trades on
 // under a key that should simply have gone stale.
 func TestEmptyFundingRateSkipsFunding(t *testing.T) {
-	a := newAdapter(t)
+	adapter := newAdapter(t)
 	frame := []byte(`{"e":"markPriceUpdate","E":1562305380000,"s":"BTCUSDT",` +
 		`"p":"11794.15000000","i":"11784.62659091","r":"","T":0}`)
 
-	msgs, err := a.Parse(frame, adaptertest.RecvNs)
+	messages, err := adapter.Parse(frame, adaptertest.ReceivedNs)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	if len(msgs) != 2 {
-		t.Fatalf("Parse produced %d messages, want 2 (mark and index, no funding)", len(msgs))
+	if len(messages) != 2 {
+		t.Fatalf("Parse produced %d messages, want 2 (mark and index, no funding)", len(messages))
 	}
-	for _, m := range msgs {
-		if m.Channel == pb.Channel_CHANNEL_FUNDING {
+	for _, message := range messages {
+		if message.Channel == manoochv1.Channel_CHANNEL_FUNDING {
 			t.Error("a funding message was produced from an empty rate")
 		}
 	}
@@ -154,21 +154,21 @@ func TestEmptyFundingRateSkipsFunding(t *testing.T) {
 // to be rejected and counted, never wrapped or clamped into something that
 // looks like a price.
 func TestOutOfRangePriceIsRejected(t *testing.T) {
-	a := newAdapter(t)
+	adapter := newAdapter(t)
 	frame := []byte(`{"e":"markPriceUpdate","E":1562305380000,"s":"BTCUSDT",` +
 		`"p":"99999999999.00000000","i":"11784.62659091","r":"0.00038167","T":1562306400000}`)
 
-	msgs, err := a.Parse(frame, adaptertest.RecvNs)
-	if len(msgs) != 0 {
-		t.Errorf("Parse produced %d messages for an out-of-range price", len(msgs))
+	messages, err := adapter.Parse(frame, adaptertest.ReceivedNs)
+	if len(messages) != 0 {
+		t.Errorf("Parse produced %d messages for an out-of-range price", len(messages))
 	}
 
-	var pe *core.ParseError
-	if !errors.As(err, &pe) {
+	var parseError *core.ParseError
+	if !errors.As(err, &parseError) {
 		t.Fatalf("Parse error = %v (%T), want *core.ParseError", err, err)
 	}
-	if pe.Kind != core.KindRange {
-		t.Errorf("kind = %q, want %q", pe.Kind, core.KindRange)
+	if parseError.Kind != core.KindRange {
+		t.Errorf("kind = %q, want %q", parseError.Kind, core.KindRange)
 	}
 	if !errors.Is(err, price.ErrOutOfRange) {
 		t.Errorf("error does not wrap price.ErrOutOfRange: %v", err)
@@ -178,81 +178,81 @@ func TestOutOfRangePriceIsRejected(t *testing.T) {
 // TestControlFramesAreNotErrors: acks and pongs are normal traffic. Treating
 // one as a failure would count parse errors on a healthy socket.
 func TestControlFramesAreNotErrors(t *testing.T) {
-	a := newAdapter(t)
+	adapter := newAdapter(t)
 	for _, frame := range []string{`{"result":null,"id":1}`, `{"result":null,"id":0}`} {
-		msgs, err := a.Parse([]byte(frame), adaptertest.RecvNs)
+		messages, err := adapter.Parse([]byte(frame), adaptertest.ReceivedNs)
 		if err != nil {
 			t.Errorf("Parse(%s) = %v, want no error", frame, err)
 		}
-		if len(msgs) != 0 {
-			t.Errorf("Parse(%s) produced %d messages", frame, len(msgs))
+		if len(messages) != 0 {
+			t.Errorf("Parse(%s) produced %d messages", frame, len(messages))
 		}
 	}
 }
 
 func TestVenueSymbol(t *testing.T) {
-	a := newAdapter(t)
+	adapter := newAdapter(t)
 	cases := []struct{ canonical, want string }{
 		{"BTC_USDT", "BTCUSDT"}, // via symbol_overrides
 		{"ETH_USDT", "ETHUSDT"}, // via the strip-separator rule
 		{"1000PEPE_USDT", "1000PEPEUSDT"},
 	}
-	for _, tc := range cases {
-		ref, err := core.ParseCanonical(tc.canonical, binance.MarketType)
+	for _, testCase := range cases {
+		reference, err := core.ParseCanonical(testCase.canonical, binance.MarketType)
 		if err != nil {
 			t.Fatal(err)
 		}
-		got, err := a.VenueSymbol(ref)
+		got, err := adapter.VenueSymbol(reference)
 		if err != nil {
-			t.Errorf("VenueSymbol(%s): %v", tc.canonical, err)
+			t.Errorf("VenueSymbol(%s): %v", testCase.canonical, err)
 			continue
 		}
-		if got != tc.want {
-			t.Errorf("VenueSymbol(%s) = %q, want %q", tc.canonical, got, tc.want)
+		if got != testCase.want {
+			t.Errorf("VenueSymbol(%s) = %q, want %q", testCase.canonical, got, testCase.want)
 		}
 	}
 
 	// Spot is not served, and answering for it would put a spot price under a
 	// perpetual's key.
-	spotRef, err := core.ParseCanonical("BTC_USDT", pb.MarketType_MARKET_TYPE_SPOT)
+	spotRef, err := core.ParseCanonical("BTC_USDT", manoochv1.MarketType_MARKET_TYPE_SPOT)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.VenueSymbol(spotRef); err == nil {
+	if _, err := adapter.VenueSymbol(spotRef); err == nil {
 		t.Error("VenueSymbol accepted a SPOT instrument")
 	}
 }
 
 func TestParseVenueSymbol(t *testing.T) {
-	a := newAdapter(t)
+	adapter := newAdapter(t)
 	cases := []struct{ in, want string }{
 		{"BTCUSDT", "BTC_USDT"},
 		{"ETHUSDT", "ETH_USDT"},
 		{"ETHBTC", "ETH_BTC"},
 		{"BTCUSDC", "BTC_USDC"},
 	}
-	for _, tc := range cases {
-		ref, err := a.ParseVenueSymbol(tc.in, binance.MarketType)
+	for _, testCase := range cases {
+		reference, err := adapter.ParseVenueSymbol(testCase.in, binance.MarketType)
 		if err != nil {
-			t.Errorf("ParseVenueSymbol(%s): %v", tc.in, err)
+			t.Errorf("ParseVenueSymbol(%s): %v", testCase.in, err)
 			continue
 		}
-		if got := ref.Canonical(); got != tc.want {
-			t.Errorf("ParseVenueSymbol(%s) = %q, want %q", tc.in, got, tc.want)
+		if got := reference.Canonical(); got != testCase.want {
+			t.Errorf("ParseVenueSymbol(%s) = %q, want %q", testCase.in, got, testCase.want)
 		}
-		if ref.Settle != ref.Quote {
-			t.Errorf("ParseVenueSymbol(%s) settle = %q, want the quote %q", tc.in, ref.Settle, ref.Quote)
+		if reference.Settle != reference.Quote {
+			t.Errorf("ParseVenueSymbol(%s) settle = %q, want the quote %q", testCase.in, reference.Settle, reference.Quote)
 		}
 	}
 
 	// A dated contract is not a perpetual, and its price is not one either.
-	if _, err := a.ParseVenueSymbol("BTCUSDT_240329", binance.MarketType); err == nil {
+	if _, err := adapter.ParseVenueSymbol("BTCUSDT_240329", binance.MarketType); err == nil {
 		t.Error("ParseVenueSymbol accepted a dated contract")
 	}
-	if _, err := a.ParseVenueSymbol("BTCXYZ", binance.MarketType); err == nil {
+	if _, err := adapter.ParseVenueSymbol("BTCXYZ", binance.MarketType); err == nil {
 		t.Error("ParseVenueSymbol accepted an unknown quote asset")
 	}
-	if _, err := a.ParseVenueSymbol("", binance.MarketType); err == nil {
+	if _, err := adapter.ParseVenueSymbol("", binance.MarketType); err == nil {
 		t.Error("ParseVenueSymbol accepted an empty symbol")
 	}
 }
@@ -261,22 +261,22 @@ func TestParseVenueSymbol(t *testing.T) {
 // back. A one-way mapping puts REST responses under keys the websocket never
 // writes to.
 func TestRoundTripSymbols(t *testing.T) {
-	a := newAdapter(t)
+	adapter := newAdapter(t)
 	for _, canonical := range []string{"BTC_USDT", "ETH_USDT", "SOL_USDT", "ETH_BTC"} {
-		ref, err := core.ParseCanonical(canonical, binance.MarketType)
+		reference, err := core.ParseCanonical(canonical, binance.MarketType)
 		if err != nil {
 			t.Fatal(err)
 		}
-		sym, err := a.VenueSymbol(ref)
+		symbol, err := adapter.VenueSymbol(reference)
 		if err != nil {
 			t.Fatalf("VenueSymbol(%s): %v", canonical, err)
 		}
-		back, err := a.ParseVenueSymbol(sym, binance.MarketType)
+		back, err := adapter.ParseVenueSymbol(symbol, binance.MarketType)
 		if err != nil {
-			t.Fatalf("ParseVenueSymbol(%s): %v", sym, err)
+			t.Fatalf("ParseVenueSymbol(%s): %v", symbol, err)
 		}
-		if back != ref {
-			t.Errorf("%s -> %s -> %s", canonical, sym, back)
+		if back != reference {
+			t.Errorf("%s -> %s -> %s", canonical, symbol, back)
 		}
 	}
 }
@@ -285,26 +285,26 @@ func TestRoundTripSymbols(t *testing.T) {
 // so subscribing per channel would spend three of the venue's slots and
 // deliver the same frame three times.
 func TestPlanSubscriptionsDeduplicates(t *testing.T) {
-	a := newAdapter(t)
-	var specs []core.StreamSpec
-	for _, sym := range []string{"ETH_USDT", "BTC_USDT"} {
-		for _, ch := range binance.Channels {
-			specs = append(specs, spec(t, sym, ch))
+	adapter := newAdapter(t)
+	var specifications []core.StreamSpec
+	for _, symbol := range []string{"ETH_USDT", "BTC_USDT"} {
+		for _, channel := range binance.Channels {
+			specifications = append(specifications, specification(t, symbol, channel))
 		}
 	}
 
-	plans, err := a.PlanSubscriptions(specs)
+	plans, err := adapter.PlanSubscriptions(specifications)
 	if err != nil {
 		t.Fatalf("PlanSubscriptions: %v", err)
 	}
 	if len(plans) != 1 {
 		t.Fatalf("plans = %d, want 1", len(plans))
 	}
-	if len(plans[0].Specs) != 6 {
-		t.Errorf("plan carries %d specs, want 6", len(plans[0].Specs))
+	if len(plans[0].Specifications) != 6 {
+		t.Errorf("plan carries %d specs, want 6", len(plans[0].Specifications))
 	}
 
-	url, err := a.SocketURL(plans[0])
+	url, err := adapter.SocketURL(plans[0])
 	if err != nil {
 		t.Fatalf("SocketURL: %v", err)
 	}
@@ -319,57 +319,57 @@ func TestPlanSubscriptionsDeduplicates(t *testing.T) {
 // lines, so the same config must produce the same IDs whatever order the
 // streams arrive in.
 func TestPlanSubscriptionsIsStable(t *testing.T) {
-	a := newAdapter(t)
+	adapter := newAdapter(t)
 	forward := []core.StreamSpec{
-		spec(t, "BTC_USDT", pb.Channel_CHANNEL_MARK_PRICE),
-		spec(t, "ETH_USDT", pb.Channel_CHANNEL_MARK_PRICE),
-		spec(t, "SOL_USDT", pb.Channel_CHANNEL_FUNDING),
+		specification(t, "BTC_USDT", manoochv1.Channel_CHANNEL_MARK_PRICE),
+		specification(t, "ETH_USDT", manoochv1.Channel_CHANNEL_MARK_PRICE),
+		specification(t, "SOL_USDT", manoochv1.Channel_CHANNEL_FUNDING),
 	}
 	reversed := []core.StreamSpec{forward[2], forward[1], forward[0]}
 
-	a1, err := a.PlanSubscriptions(forward)
+	firstPlans, err := adapter.PlanSubscriptions(forward)
 	if err != nil {
 		t.Fatal(err)
 	}
-	a2, err := a.PlanSubscriptions(reversed)
+	secondPlans, err := adapter.PlanSubscriptions(reversed)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(a1) != len(a2) {
-		t.Fatalf("plans = %d and %d", len(a1), len(a2))
+	if len(firstPlans) != len(secondPlans) {
+		t.Fatalf("plans = %d and %d", len(firstPlans), len(secondPlans))
 	}
-	for i := range a1 {
-		if a1[i].ID != a2[i].ID {
-			t.Errorf("plan %d id = %q and %q", i, a1[i].ID, a2[i].ID)
+	for i := range firstPlans {
+		if firstPlans[i].ID != secondPlans[i].ID {
+			t.Errorf("plan %d id = %q and %q", i, firstPlans[i].ID, secondPlans[i].ID)
 		}
-		u1, _ := a.SocketURL(a1[i])
-		u2, _ := a.SocketURL(a2[i])
-		if u1 != u2 {
-			t.Errorf("plan %d url = %q and %q", i, u1, u2)
+		firstURL, _ := adapter.SocketURL(firstPlans[i])
+		secondURL, _ := adapter.SocketURL(secondPlans[i])
+		if firstURL != secondURL {
+			t.Errorf("plan %d url = %q and %q", i, firstURL, secondURL)
 		}
 	}
 }
 
 // TestPlanSubscriptionsChunks respects the venue's per-socket limit.
 func TestPlanSubscriptionsChunks(t *testing.T) {
-	a, err := binance.New(binance.Options{
-		WSEndpoint:          "wss://fstream.binance.com/stream",
+	adapter, err := binance.New(binance.Options{
+		WebSocketEndpoint:   "wss://fstream.binance.com/stream",
 		MaxStreamsPerSocket: 2,
-		TTLs: map[pb.Channel]time.Duration{
-			pb.Channel_CHANNEL_MARK_PRICE:  time.Second,
-			pb.Channel_CHANNEL_INDEX_PRICE: time.Second,
-			pb.Channel_CHANNEL_FUNDING:     time.Second,
+		TimeToLive: map[manoochv1.Channel]time.Duration{
+			manoochv1.Channel_CHANNEL_MARK_PRICE:  time.Second,
+			manoochv1.Channel_CHANNEL_INDEX_PRICE: time.Second,
+			manoochv1.Channel_CHANNEL_FUNDING:     time.Second,
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	var specs []core.StreamSpec
-	for _, sym := range []string{"BTC_USDT", "ETH_USDT", "SOL_USDT", "XRP_USDT", "ADA_USDT"} {
-		specs = append(specs, spec(t, sym, pb.Channel_CHANNEL_MARK_PRICE))
+	var specifications []core.StreamSpec
+	for _, symbol := range []string{"BTC_USDT", "ETH_USDT", "SOL_USDT", "XRP_USDT", "ADA_USDT"} {
+		specifications = append(specifications, specification(t, symbol, manoochv1.Channel_CHANNEL_MARK_PRICE))
 	}
-	plans, err := a.PlanSubscriptions(specs)
+	plans, err := adapter.PlanSubscriptions(specifications)
 	if err != nil {
 		t.Fatalf("PlanSubscriptions: %v", err)
 	}
@@ -377,14 +377,14 @@ func TestPlanSubscriptionsChunks(t *testing.T) {
 		t.Fatalf("plans = %d, want 3 (5 streams at 2 per socket)", len(plans))
 	}
 	seen := map[string]bool{}
-	for _, p := range plans {
-		if len(p.Specs) > 2 {
-			t.Errorf("plan %s carries %d streams, over the limit of 2", p.ID, len(p.Specs))
+	for _, plan := range plans {
+		if len(plan.Specifications) > 2 {
+			t.Errorf("plan %s carries %d streams, over the limit of 2", plan.ID, len(plan.Specifications))
 		}
-		if seen[p.ID] {
-			t.Errorf("duplicate plan id %q", p.ID)
+		if seen[plan.ID] {
+			t.Errorf("duplicate plan id %q", plan.ID)
 		}
-		seen[p.ID] = true
+		seen[plan.ID] = true
 	}
 }
 
@@ -392,20 +392,20 @@ func TestPlanSubscriptionsChunks(t *testing.T) {
 // carry must be a startup error, not a key nobody ever writes — an unwritten
 // key looks exactly like a venue that went quiet.
 func TestPlanSubscriptionsRejectsUnservedStreams(t *testing.T) {
-	a := newAdapter(t)
+	adapter := newAdapter(t)
 
-	spotRef, err := core.ParseCanonical("BTC_USDT", pb.MarketType_MARKET_TYPE_SPOT)
+	spotRef, err := core.ParseCanonical("BTC_USDT", manoochv1.MarketType_MARKET_TYPE_SPOT)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.PlanSubscriptions([]core.StreamSpec{
-		{Instrument: spotRef, Channel: pb.Channel_CHANNEL_MARK_PRICE},
+	if _, err := adapter.PlanSubscriptions([]core.StreamSpec{
+		{Instrument: spotRef, Channel: manoochv1.Channel_CHANNEL_MARK_PRICE},
 	}); err == nil {
 		t.Error("PlanSubscriptions accepted a SPOT stream")
 	}
 
-	if _, err := a.PlanSubscriptions([]core.StreamSpec{
-		spec(t, "BTC_USDT", pb.Channel_CHANNEL_METADATA),
+	if _, err := adapter.PlanSubscriptions([]core.StreamSpec{
+		specification(t, "BTC_USDT", manoochv1.Channel_CHANNEL_METADATA),
 	}); err == nil {
 		t.Error("PlanSubscriptions accepted a metadata stream this adapter does not serve")
 	}
@@ -413,12 +413,12 @@ func TestPlanSubscriptionsRejectsUnservedStreams(t *testing.T) {
 
 func TestNewRejectsIncompleteOptions(t *testing.T) {
 	full := binance.Options{
-		WSEndpoint:          "wss://fstream.binance.com/stream",
+		WebSocketEndpoint:   "wss://fstream.binance.com/stream",
 		MaxStreamsPerSocket: 10,
-		TTLs: map[pb.Channel]time.Duration{
-			pb.Channel_CHANNEL_MARK_PRICE:  time.Second,
-			pb.Channel_CHANNEL_INDEX_PRICE: time.Second,
-			pb.Channel_CHANNEL_FUNDING:     time.Second,
+		TimeToLive: map[manoochv1.Channel]time.Duration{
+			manoochv1.Channel_CHANNEL_MARK_PRICE:  time.Second,
+			manoochv1.Channel_CHANNEL_INDEX_PRICE: time.Second,
+			manoochv1.Channel_CHANNEL_FUNDING:     time.Second,
 		},
 	}
 	if _, err := binance.New(full); err != nil {
@@ -426,7 +426,7 @@ func TestNewRejectsIncompleteOptions(t *testing.T) {
 	}
 
 	noEndpoint := full
-	noEndpoint.WSEndpoint = ""
+	noEndpoint.WebSocketEndpoint = ""
 	if _, err := binance.New(noEndpoint); err == nil {
 		t.Error("New accepted an empty ws endpoint")
 	}
@@ -439,19 +439,19 @@ func TestNewRejectsIncompleteOptions(t *testing.T) {
 
 	// A missing TTL would publish a key with no expiry, which reports a dead
 	// stream as fresh forever.
-	missingTTL := full
-	missingTTL.TTLs = map[pb.Channel]time.Duration{pb.Channel_CHANNEL_MARK_PRICE: time.Second}
-	if _, err := binance.New(missingTTL); err == nil {
+	missingTimeToLive := full
+	missingTimeToLive.TimeToLive = map[manoochv1.Channel]time.Duration{manoochv1.Channel_CHANNEL_MARK_PRICE: time.Second}
+	if _, err := binance.New(missingTimeToLive); err == nil {
 		t.Error("New accepted options with no funding TTL")
 	}
 }
 
 func TestRESTCost(t *testing.T) {
-	a := newAdapter(t)
-	if got := a.RESTCost(core.OpFetchOnce); got != 1 {
+	adapter := newAdapter(t)
+	if got := adapter.RESTCost(core.OpFetchOnce); got != 1 {
 		t.Errorf("RESTCost(fetch_once) = %d, want 1", got)
 	}
-	if got := a.RESTCost(core.OpFetchMetadata); got != 1 {
+	if got := adapter.RESTCost(core.OpFetchMetadata); got != 1 {
 		t.Errorf("RESTCost(fetch_metadata) = %d, want 1", got)
 	}
 }
@@ -463,26 +463,26 @@ const premiumIndexBody = `{"symbol":"BTCUSDT","markPrice":"11794.15000000",` +
 	`"lastFundingRate":"0.00038167","interestRate":"0.00010000",` +
 	`"nextFundingTime":1562306400000,"time":1562305380000}`
 
-func restAdapter(t *testing.T, h http.HandlerFunc) *binance.Adapter {
+func restAdapter(t *testing.T, handler http.HandlerFunc) *binance.Adapter {
 	t.Helper()
 
-	srv := httptest.NewServer(h)
-	t.Cleanup(srv.Close)
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
 
-	a, err := binance.New(binance.Options{
-		WSEndpoint:          "wss://fstream.binance.com/stream",
-		RESTEndpoint:        srv.URL,
+	adapter, err := binance.New(binance.Options{
+		WebSocketEndpoint:   "wss://fstream.binance.com/stream",
+		RESTEndpoint:        server.URL,
 		MaxStreamsPerSocket: 100,
-		TTLs: map[pb.Channel]time.Duration{
-			pb.Channel_CHANNEL_MARK_PRICE:  3 * time.Second,
-			pb.Channel_CHANNEL_INDEX_PRICE: 3 * time.Second,
-			pb.Channel_CHANNEL_FUNDING:     3 * time.Second,
+		TimeToLive: map[manoochv1.Channel]time.Duration{
+			manoochv1.Channel_CHANNEL_MARK_PRICE:  3 * time.Second,
+			manoochv1.Channel_CHANNEL_INDEX_PRICE: 3 * time.Second,
+			manoochv1.Channel_CHANNEL_FUNDING:     3 * time.Second,
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return a
+	return adapter
 }
 
 // TestFetchOnceReturnsOnlyTheRequestedChannel: the endpoint answers all three,
@@ -490,61 +490,61 @@ func restAdapter(t *testing.T, h http.HandlerFunc) *binance.Adapter {
 // overwriting two others from a source it did not choose is a surprise.
 func TestFetchOnceReturnsOnlyTheRequestedChannel(t *testing.T) {
 	var gotPath string
-	a := restAdapter(t, func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.RequestURI()
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(premiumIndexBody))
+	adapter := restAdapter(t, func(response http.ResponseWriter, request *http.Request) {
+		gotPath = request.URL.RequestURI()
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(premiumIndexBody))
 	})
 
-	for _, tc := range []struct {
-		ch    pb.Channel
-		check func(t *testing.T, m core.Message)
+	for _, testCase := range []struct {
+		channel manoochv1.Channel
+		check   func(t *testing.T, message core.Message)
 	}{
-		{pb.Channel_CHANNEL_MARK_PRICE, func(t *testing.T, m core.Message) {
-			if got := price.Price(m.Proto.(*pb.MarkPrice).MarkPrice).String(); got != "11794.15" {
+		{manoochv1.Channel_CHANNEL_MARK_PRICE, func(t *testing.T, message core.Message) {
+			if got := price.Price(message.Proto.(*manoochv1.MarkPrice).MarkPrice).String(); got != "11794.15" {
 				t.Errorf("mark price = %s", got)
 			}
 		}},
-		{pb.Channel_CHANNEL_INDEX_PRICE, func(t *testing.T, m core.Message) {
-			if got := price.Price(m.Proto.(*pb.IndexPrice).IndexPrice).String(); got != "11784.62659091" {
+		{manoochv1.Channel_CHANNEL_INDEX_PRICE, func(t *testing.T, message core.Message) {
+			if got := price.Price(message.Proto.(*manoochv1.IndexPrice).IndexPrice).String(); got != "11784.62659091" {
 				t.Errorf("index price = %s", got)
 			}
 		}},
-		{pb.Channel_CHANNEL_FUNDING, func(t *testing.T, m core.Message) {
-			if got := price.Rate(m.Proto.(*pb.Funding).FundingRate).String(); got != "0.00038167" {
+		{manoochv1.Channel_CHANNEL_FUNDING, func(t *testing.T, message core.Message) {
+			if got := price.Rate(message.Proto.(*manoochv1.Funding).FundingRate).String(); got != "0.00038167" {
 				t.Errorf("funding rate = %s", got)
 			}
 		}},
 	} {
-		t.Run(core.ChannelName(tc.ch), func(t *testing.T) {
-			msgs, err := a.FetchOnce(context.Background(), spec(t, "BTC_USDT", tc.ch))
+		t.Run(core.ChannelName(testCase.channel), func(t *testing.T) {
+			messages, err := adapter.FetchOnce(context.Background(), specification(t, "BTC_USDT", testCase.channel))
 			if err != nil {
 				t.Fatalf("FetchOnce: %v", err)
 			}
-			if len(msgs) != 1 {
-				t.Fatalf("FetchOnce returned %d messages, want 1", len(msgs))
+			if len(messages) != 1 {
+				t.Fatalf("FetchOnce returned %d messages, want 1", len(messages))
 			}
-			m := msgs[0]
-			if m.Channel != tc.ch {
-				t.Errorf("channel = %v, want %v", m.Channel, tc.ch)
+			message := messages[0]
+			if message.Channel != testCase.channel {
+				t.Errorf("channel = %v, want %v", message.Channel, testCase.channel)
 			}
 
 			// A polled value must say so, or a consumer cannot tell a live
 			// stream from a stream being propped up by REST.
-			env := m.Proto.(interface{ GetEnv() *pb.Envelope }).GetEnv()
-			if env.Source != pb.Source_SOURCE_REST {
-				t.Errorf("source = %v, want REST", env.Source)
+			envelope := message.Proto.(interface{ GetEnv() *manoochv1.Envelope }).GetEnv()
+			if envelope.Source != manoochv1.Source_SOURCE_REST {
+				t.Errorf("source = %v, want REST", envelope.Source)
 			}
-			if env.Status == pb.Status_STATUS_UNSPECIFIED {
+			if envelope.Status == manoochv1.Status_STATUS_UNSPECIFIED {
 				t.Error("status is unspecified")
 			}
-			if env.RecvTimeNs <= 0 {
+			if envelope.RecvTimeNs <= 0 {
 				t.Error("recv_time_ns not stamped")
 			}
-			if env.PublishTimeNs != 0 {
+			if envelope.PublishTimeNs != 0 {
 				t.Error("publish_time_ns set outside the publisher")
 			}
-			tc.check(t, m)
+			testCase.check(t, message)
 		})
 	}
 
@@ -556,21 +556,21 @@ func TestFetchOnceReturnsOnlyTheRequestedChannel(t *testing.T) {
 // TestFetchOnceSurfacesVenueErrors: Binance answers a rejection with a code and
 // a message, and dropping them leaves an operator with "HTTP 400".
 func TestFetchOnceSurfacesVenueErrors(t *testing.T) {
-	a := restAdapter(t, func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte(`{"code":-1121,"msg":"Invalid symbol."}`))
+	adapter := restAdapter(t, func(response http.ResponseWriter, request *http.Request) {
+		response.WriteHeader(http.StatusBadRequest)
+		_, _ = response.Write([]byte(`{"code":-1121,"msg":"Invalid symbol."}`))
 	})
 
-	_, err := a.FetchOnce(context.Background(), spec(t, "BTC_USDT", pb.Channel_CHANNEL_MARK_PRICE))
+	_, err := adapter.FetchOnce(context.Background(), specification(t, "BTC_USDT", manoochv1.Channel_CHANNEL_MARK_PRICE))
 	if err == nil {
 		t.Fatal("FetchOnce against a 400 succeeded")
 	}
-	var pe *core.ParseError
-	if !errors.As(err, &pe) {
+	var parseError *core.ParseError
+	if !errors.As(err, &parseError) {
 		t.Fatalf("error = %v (%T), want *core.ParseError", err, err)
 	}
-	if pe.Kind != core.KindVenue {
-		t.Errorf("kind = %q, want %q", pe.Kind, core.KindVenue)
+	if parseError.Kind != core.KindVenue {
+		t.Errorf("kind = %q, want %q", parseError.Kind, core.KindVenue)
 	}
 	if !contains(err.Error(), "-1121") {
 		t.Errorf("error drops the venue's code: %v", err)
@@ -603,21 +603,21 @@ func (denyingLimiter) Used(string, ratelimit.LimitKind) (int, int) { return 0, 0
 // and the supervisor turns it into a failed dial.
 func TestLimiterDenialStopsTheRequest(t *testing.T) {
 	var calls int
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		calls++
-		_, _ = w.Write([]byte(premiumIndexBody))
+		_, _ = response.Write([]byte(premiumIndexBody))
 	}))
-	t.Cleanup(srv.Close)
+	t.Cleanup(server.Close)
 
-	a, err := binance.New(binance.Options{
-		WSEndpoint:          "wss://fstream.binance.com/stream",
-		RESTEndpoint:        srv.URL,
+	adapter, err := binance.New(binance.Options{
+		WebSocketEndpoint:   "wss://fstream.binance.com/stream",
+		RESTEndpoint:        server.URL,
 		MaxStreamsPerSocket: 100,
 		Limiter:             denyingLimiter{},
-		TTLs: map[pb.Channel]time.Duration{
-			pb.Channel_CHANNEL_MARK_PRICE:  3 * time.Second,
-			pb.Channel_CHANNEL_INDEX_PRICE: 3 * time.Second,
-			pb.Channel_CHANNEL_FUNDING:     3 * time.Second,
+		TimeToLive: map[manoochv1.Channel]time.Duration{
+			manoochv1.Channel_CHANNEL_MARK_PRICE:  3 * time.Second,
+			manoochv1.Channel_CHANNEL_INDEX_PRICE: 3 * time.Second,
+			manoochv1.Channel_CHANNEL_FUNDING:     3 * time.Second,
 		},
 		Dial: func(context.Context, transport.Options) (core.Conn, error) {
 			t.Error("Dial reached the transport with no connect budget")
@@ -628,7 +628,7 @@ func TestLimiterDenialStopsTheRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = a.FetchOnce(context.Background(), spec(t, "BTC_USDT", pb.Channel_CHANNEL_MARK_PRICE))
+	_, err = adapter.FetchOnce(context.Background(), specification(t, "BTC_USDT", manoochv1.Channel_CHANNEL_MARK_PRICE))
 	if !errors.Is(err, ratelimit.ErrBudgetExhausted) {
 		t.Errorf("FetchOnce = %v, want ErrBudgetExhausted", err)
 	}
@@ -636,11 +636,11 @@ func TestLimiterDenialStopsTheRequest(t *testing.T) {
 		t.Errorf("the venue was called %d times with no budget", calls)
 	}
 
-	plans, err := a.PlanSubscriptions([]core.StreamSpec{spec(t, "BTC_USDT", pb.Channel_CHANNEL_MARK_PRICE)})
+	plans, err := adapter.PlanSubscriptions([]core.StreamSpec{specification(t, "BTC_USDT", manoochv1.Channel_CHANNEL_MARK_PRICE)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.Dial(context.Background(), plans[0]); !errors.Is(err, ratelimit.ErrBudgetExhausted) {
+	if _, err := adapter.Dial(context.Background(), plans[0]); !errors.Is(err, ratelimit.ErrBudgetExhausted) {
 		t.Errorf("Dial = %v, want ErrBudgetExhausted", err)
 	}
 }
@@ -676,12 +676,12 @@ const exchangeInfoBody = `{
 // everything else in the service uses.
 func TestFetchMetadata(t *testing.T) {
 	var gotPath string
-	a := restAdapter(t, func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.RequestURI()
-		_, _ = w.Write([]byte(exchangeInfoBody))
+	adapter := restAdapter(t, func(response http.ResponseWriter, request *http.Request) {
+		gotPath = request.URL.RequestURI()
+		_, _ = response.Write([]byte(exchangeInfoBody))
 	})
 
-	metas, err := a.FetchMetadata(context.Background(), binance.MarketType)
+	metadataList, err := adapter.FetchMetadata(context.Background(), binance.MarketType)
 	if err != nil {
 		t.Fatalf("FetchMetadata: %v", err)
 	}
@@ -692,11 +692,11 @@ func TestFetchMetadata(t *testing.T) {
 	// The dated contract and the unmappable quote asset are skipped, not
 	// errors: the endpoint lists every contract Binance has, and failing on one
 	// nobody asked about would take the whole refresh down.
-	if len(metas) != 2 {
-		t.Fatalf("metas = %d, want 2 (BTCUSDT and ETHUSDT)", len(metas))
+	if len(metadataList) != 2 {
+		t.Fatalf("metas = %d, want 2 (BTCUSDT and ETHUSDT)", len(metadataList))
 	}
 
-	btc := metas[0]
+	btc := metadataList[0]
 	if got := btc.Env.Instrument.Canonical; got != "BTC_USDT" {
 		t.Errorf("canonical = %q", got)
 	}
@@ -729,10 +729,10 @@ func TestFetchMetadata(t *testing.T) {
 	if btc.LastRefreshNs <= 0 {
 		t.Error("last_refresh_ns not stamped")
 	}
-	if btc.Env.Source != pb.Source_SOURCE_REST {
+	if btc.Env.Source != manoochv1.Source_SOURCE_REST {
 		t.Errorf("source = %v, want REST", btc.Env.Source)
 	}
-	if btc.Env.Status == pb.Status_STATUS_UNSPECIFIED {
+	if btc.Env.Status == manoochv1.Status_STATUS_UNSPECIFIED {
 		t.Error("status is unspecified")
 	}
 	if want := 1562305380000 * int64(time.Millisecond); btc.Env.ExchangeTimeNs != want {
@@ -750,7 +750,7 @@ func TestFetchMetadata(t *testing.T) {
 
 	// A symbol that is not trading is published and marked inactive rather
 	// than dropped: silence would read as a symbol the venue never had.
-	eth := metas[1]
+	eth := metadataList[1]
 	if eth.Active {
 		t.Error("a SETTLING symbol is active")
 	}
@@ -760,28 +760,28 @@ func TestFetchMetadata(t *testing.T) {
 // precision, is an error. Precision a consumer cannot round an order to is not
 // metadata.
 func TestFetchMetadataRejectsUnusableFilters(t *testing.T) {
-	a := restAdapter(t, func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"serverTime":1562305380000,"symbols":[
+	adapter := restAdapter(t, func(response http.ResponseWriter, request *http.Request) {
+		_, _ = response.Write([]byte(`{"serverTime":1562305380000,"symbols":[
 		  {"symbol":"BTCUSDT","contractType":"PERPETUAL","status":"TRADING","filters":[]}]}`))
 	})
 
-	_, err := a.FetchMetadata(context.Background(), binance.MarketType)
-	var pe *core.ParseError
-	if !errors.As(err, &pe) {
+	_, err := adapter.FetchMetadata(context.Background(), binance.MarketType)
+	var parseError *core.ParseError
+	if !errors.As(err, &parseError) {
 		t.Fatalf("FetchMetadata = %v (%T), want *core.ParseError", err, err)
 	}
-	if pe.Kind != core.KindField {
-		t.Errorf("kind = %q, want %q", pe.Kind, core.KindField)
+	if parseError.Kind != core.KindField {
+		t.Errorf("kind = %q, want %q", parseError.Kind, core.KindField)
 	}
 }
 
 // TestFetchMetadataRejectsAnEmptyList: a response listing no perpetuals is not
 // an empty venue, it is a response we did not understand.
 func TestFetchMetadataRejectsAnEmptyList(t *testing.T) {
-	a := restAdapter(t, func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"serverTime":1562305380000,"symbols":[]}`))
+	adapter := restAdapter(t, func(response http.ResponseWriter, request *http.Request) {
+		_, _ = response.Write([]byte(`{"serverTime":1562305380000,"symbols":[]}`))
 	})
-	if _, err := a.FetchMetadata(context.Background(), binance.MarketType); err == nil {
+	if _, err := adapter.FetchMetadata(context.Background(), binance.MarketType); err == nil {
 		t.Error("FetchMetadata accepted a list with no perpetuals")
 	}
 }
@@ -789,11 +789,11 @@ func TestFetchMetadataRejectsAnEmptyList(t *testing.T) {
 // TestFetchMetadataSurfacesVenueErrors keeps Binance's own message, the same
 // way FetchOnce does.
 func TestFetchMetadataSurfacesVenueErrors(t *testing.T) {
-	a := restAdapter(t, func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusTooManyRequests)
-		_, _ = w.Write([]byte(`{"code":-1003,"msg":"Too many requests."}`))
+	adapter := restAdapter(t, func(response http.ResponseWriter, request *http.Request) {
+		response.WriteHeader(http.StatusTooManyRequests)
+		_, _ = response.Write([]byte(`{"code":-1003,"msg":"Too many requests."}`))
 	})
-	_, err := a.FetchMetadata(context.Background(), binance.MarketType)
+	_, err := adapter.FetchMetadata(context.Background(), binance.MarketType)
 	if err == nil {
 		t.Fatal("FetchMetadata against a 429 succeeded")
 	}
@@ -808,23 +808,23 @@ func TestFetchMetadataSurfacesVenueErrors(t *testing.T) {
 func TestStalledVenueDoesNotParkAFetch(t *testing.T) {
 	stalled := make(chan struct{})
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		<-stalled
 	}))
-	t.Cleanup(srv.Close)
+	t.Cleanup(server.Close)
 	// Registered after the server's own cleanup so it runs before it: Close
 	// waits for outstanding requests, and this is what lets that one finish.
 	t.Cleanup(func() { close(stalled) })
 
-	a, err := binance.New(binance.Options{
-		WSEndpoint:          "wss://fstream.binance.com/stream",
-		RESTEndpoint:        srv.URL,
+	adapter, err := binance.New(binance.Options{
+		WebSocketEndpoint:   "wss://fstream.binance.com/stream",
+		RESTEndpoint:        server.URL,
 		MaxStreamsPerSocket: 100,
 		HTTPTimeout:         200 * time.Millisecond,
-		TTLs: map[pb.Channel]time.Duration{
-			pb.Channel_CHANNEL_MARK_PRICE:  3 * time.Second,
-			pb.Channel_CHANNEL_INDEX_PRICE: 3 * time.Second,
-			pb.Channel_CHANNEL_FUNDING:     3 * time.Second,
+		TimeToLive: map[manoochv1.Channel]time.Duration{
+			manoochv1.Channel_CHANNEL_MARK_PRICE:  3 * time.Second,
+			manoochv1.Channel_CHANNEL_INDEX_PRICE: 3 * time.Second,
+			manoochv1.Channel_CHANNEL_FUNDING:     3 * time.Second,
 		},
 	})
 	if err != nil {
@@ -833,7 +833,7 @@ func TestStalledVenueDoesNotParkAFetch(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := a.FetchOnce(context.Background(), spec(t, "BTC_USDT", pb.Channel_CHANNEL_MARK_PRICE))
+		_, err := adapter.FetchOnce(context.Background(), specification(t, "BTC_USDT", manoochv1.Channel_CHANNEL_MARK_PRICE))
 		done <- err
 	}()
 

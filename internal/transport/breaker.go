@@ -30,7 +30,7 @@ type Breaker struct {
 	openDuration time.Duration
 	now          func() time.Time
 
-	mu       sync.Mutex
+	mutex    sync.Mutex
 	failures int
 	openedAt time.Time
 	// probing is the single attempt handed out when the open period elapses.
@@ -42,14 +42,14 @@ type Breaker struct {
 // NewBreaker builds a breaker. A threshold below 1 or a non-positive duration
 // disables it: it then allows every attempt, which is what a config with the
 // section removed should mean.
-func NewBreaker(opts BreakerOptions) *Breaker {
-	if opts.Now == nil {
-		opts.Now = time.Now
+func NewBreaker(options BreakerOptions) *Breaker {
+	if options.Now == nil {
+		options.Now = time.Now
 	}
 	return &Breaker{
-		threshold:    opts.ConsecutiveFailures,
-		openDuration: opts.OpenDuration,
-		now:          opts.Now,
+		threshold:    options.ConsecutiveFailures,
+		openDuration: options.OpenDuration,
+		now:          options.Now,
 	}
 }
 
@@ -58,60 +58,60 @@ func NewBreaker(opts BreakerOptions) *Breaker {
 //
 // Calling it is what hands out the post-expiry probe, so call it once per
 // attempt and act on the answer.
-func (b *Breaker) Retry() time.Duration {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+func (breaker *Breaker) Retry() time.Duration {
+	breaker.mutex.Lock()
+	defer breaker.mutex.Unlock()
 
-	if b.openedAt.IsZero() {
+	if breaker.openedAt.IsZero() {
 		return 0
 	}
-	if d := b.openDuration - b.now().Sub(b.openedAt); d > 0 {
-		return d
+	if duration := breaker.openDuration - breaker.now().Sub(breaker.openedAt); duration > 0 {
+		return duration
 	}
-	b.openedAt = time.Time{}
-	b.probing = true
+	breaker.openedAt = time.Time{}
+	breaker.probing = true
 	return 0
 }
 
 // Fail records a failed attempt, opening the breaker at the threshold and
 // reopening it when the probe was the thing that failed.
-func (b *Breaker) Fail() {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+func (breaker *Breaker) Fail() {
+	breaker.mutex.Lock()
+	defer breaker.mutex.Unlock()
 
-	b.failures++
-	if !b.enabled() {
+	breaker.failures++
+	if !breaker.enabled() {
 		return
 	}
-	if b.probing || b.failures >= b.threshold {
-		b.probing = false
-		b.openedAt = b.now()
+	if breaker.probing || breaker.failures >= breaker.threshold {
+		breaker.probing = false
+		breaker.openedAt = breaker.now()
 	}
 }
 
 // Succeed records a working connection and closes the breaker.
-func (b *Breaker) Succeed() {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+func (breaker *Breaker) Succeed() {
+	breaker.mutex.Lock()
+	defer breaker.mutex.Unlock()
 
-	b.failures = 0
-	b.probing = false
-	b.openedAt = time.Time{}
+	breaker.failures = 0
+	breaker.probing = false
+	breaker.openedAt = time.Time{}
 }
 
 // Open reports whether the breaker is currently refusing attempts. It is the
 // status reason a stream on the affected socket publishes.
-func (b *Breaker) Open() bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return !b.openedAt.IsZero() && b.now().Sub(b.openedAt) < b.openDuration
+func (breaker *Breaker) Open() bool {
+	breaker.mutex.Lock()
+	defer breaker.mutex.Unlock()
+	return !breaker.openedAt.IsZero() && breaker.now().Sub(breaker.openedAt) < breaker.openDuration
 }
 
 // Failures is the consecutive failure count, for logs.
-func (b *Breaker) Failures() int {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.failures
+func (breaker *Breaker) Failures() int {
+	breaker.mutex.Lock()
+	defer breaker.mutex.Unlock()
+	return breaker.failures
 }
 
-func (b *Breaker) enabled() bool { return b.threshold >= 1 && b.openDuration > 0 }
+func (breaker *Breaker) enabled() bool { return breaker.threshold >= 1 && breaker.openDuration > 0 }

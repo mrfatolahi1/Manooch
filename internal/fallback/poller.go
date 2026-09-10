@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	pb "github.com/you/manooch/gen/manoochv1"
+	"github.com/you/manooch/gen/manoochv1"
 	"github.com/you/manooch/internal/core"
 )
 
@@ -28,11 +28,11 @@ const (
 
 // A poller serves one stream over REST until it is stopped.
 type poller struct {
-	w    *Watcher
-	spec core.StreamSpec
-	stop chan struct{}
-	done chan struct{}
-	once sync.Once
+	watcher       *Watcher
+	specification core.StreamSpec
+	stop          chan struct{}
+	done          chan struct{}
+	once          sync.Once
 }
 
 // engage starts polling a stream, or marks it STALE if it cannot.
@@ -41,46 +41,46 @@ type poller struct {
 // endpoint answers all three channels, but the other two are still fresh from
 // the socket, and republishing them from REST would reset their TTL — the one
 // signal saying they are fine — on the strength of a poll nobody asked for.
-func (w *Watcher) engage(ctx context.Context, spec core.StreamSpec) {
-	w.mu.Lock()
-	if _, on := w.active[spec]; on {
-		w.mu.Unlock()
+func (watcher *Watcher) engage(ctx context.Context, specification core.StreamSpec) {
+	watcher.mutex.Lock()
+	if _, on := watcher.active[specification]; on {
+		watcher.mutex.Unlock()
 		return
 	}
-	if len(w.active) >= w.opts.MaxConcurrentPolls {
-		w.mu.Unlock()
+	if len(watcher.active) >= watcher.options.MaxConcurrentPolls {
+		watcher.mutex.Unlock()
 		// Past the cap the stream goes STALE rather than into a queue. A
 		// queued poll is a value that arrives after it stopped being worth
 		// having, published as though it were current.
-		w.count(spec, resultCapacity)
-		w.opts.Health.FallbackFailed(spec, reasonCapacity)
+		watcher.count(specification, resultCapacity)
+		watcher.options.Health.FallbackFailed(specification, reasonCapacity)
 		return
 	}
-	p := &poller{w: w, spec: spec, stop: make(chan struct{}), done: make(chan struct{})}
-	w.active[spec] = p
-	w.mu.Unlock()
+	poller := &poller{watcher: watcher, specification: specification, stop: make(chan struct{}), done: make(chan struct{})}
+	watcher.active[specification] = poller
+	watcher.mutex.Unlock()
 
-	w.opts.Health.FallbackEngaged(spec)
-	w.opts.Log.Warn("rest fallback engaged", "stream", spec.String())
-	go p.run(ctx)
+	watcher.options.Health.FallbackEngaged(specification)
+	watcher.options.Log.Warn("rest fallback engaged", "stream", specification.String())
+	go poller.run(ctx)
 }
 
 // Note records that a websocket message arrived for a stream, which is the only
 // thing that ends fallback. It is called on the publish path for every message,
 // so it does nothing at all in the ordinary case.
-func (w *Watcher) Note(spec core.StreamSpec) {
-	w.mu.Lock()
-	p := w.active[spec]
-	if p != nil {
-		delete(w.active, spec)
+func (watcher *Watcher) Note(specification core.StreamSpec) {
+	watcher.mutex.Lock()
+	poller := watcher.active[specification]
+	if poller != nil {
+		delete(watcher.active, specification)
 	}
-	hadExpiry := w.expired[spec]
-	delete(w.expired, spec)
-	w.mu.Unlock()
+	hadExpiry := watcher.expired[specification]
+	delete(watcher.expired, specification)
+	watcher.mutex.Unlock()
 
-	if p == nil {
+	if poller == nil {
 		if hadExpiry {
-			w.opts.Health.FallbackDisengaged(spec)
+			watcher.options.Health.FallbackDisengaged(specification)
 		}
 		return
 	}
@@ -88,64 +88,64 @@ func (w *Watcher) Note(spec core.StreamSpec) {
 	// Signalled, not waited for. This runs on the publish path of a stream
 	// that is working again, and a poll parked in an HTTP call to a venue
 	// having a bad day would otherwise stall the socket behind it.
-	p.signal()
-	w.opts.Health.FallbackDisengaged(spec)
-	w.setActiveMetric(spec, 0)
-	w.opts.Log.Info("rest fallback disengaged", "stream", spec.String())
+	poller.signal()
+	watcher.options.Health.FallbackDisengaged(specification)
+	watcher.setActiveMetric(specification, 0)
+	watcher.options.Log.Info("rest fallback disengaged", "stream", specification.String())
 }
 
 // Active is how many streams are currently being served over REST.
-func (w *Watcher) Active() int {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return len(w.active)
+func (watcher *Watcher) Active() int {
+	watcher.mutex.Lock()
+	defer watcher.mutex.Unlock()
+	return len(watcher.active)
 }
 
 // stop ends every poller, on the way out.
-func (w *Watcher) stop() {
-	w.mu.Lock()
-	pollers := make([]*poller, 0, len(w.active))
-	for spec, p := range w.active {
-		pollers = append(pollers, p)
-		delete(w.active, spec)
+func (watcher *Watcher) stop() {
+	watcher.mutex.Lock()
+	pollers := make([]*poller, 0, len(watcher.active))
+	for specification, poller := range watcher.active {
+		pollers = append(pollers, poller)
+		delete(watcher.active, specification)
 	}
-	w.mu.Unlock()
+	watcher.mutex.Unlock()
 
-	for _, p := range pollers {
-		p.halt()
+	for _, poller := range pollers {
+		poller.halt()
 	}
 }
 
 // run polls until stopped. The first poll is immediate: waiting a full interval
 // would leave the key absent for that long having already noticed it was gone.
-func (p *poller) run(ctx context.Context) {
-	defer close(p.done)
+func (poller *poller) run(ctx context.Context) {
+	defer close(poller.done)
 
-	tick := time.NewTicker(p.w.opts.PollInterval)
+	tick := time.NewTicker(poller.watcher.options.PollInterval)
 	defer tick.Stop()
 
-	p.poll(ctx)
+	poller.poll(ctx)
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-p.stop:
+		case <-poller.stop:
 			return
 		case <-tick.C:
-			p.poll(ctx)
+			poller.poll(ctx)
 		}
 	}
 }
 
 // signal tells the poller to stop, without waiting for it.
-func (p *poller) signal() {
-	p.once.Do(func() { close(p.stop) })
+func (poller *poller) signal() {
+	poller.once.Do(func() { close(poller.stop) })
 }
 
 // halt stops the poller and waits for its goroutine, for shutdown.
-func (p *poller) halt() {
-	p.signal()
-	<-p.done
+func (poller *poller) halt() {
+	poller.signal()
+	<-poller.done
 }
 
 // poll fetches one value and publishes it.
@@ -153,29 +153,29 @@ func (p *poller) halt() {
 // Every failure path ends in STALE. A fallback that quietly skips a poll is
 // precisely the failure this service exists to prevent: the key stays absent,
 // the consumer sees nothing, and nothing anywhere says why.
-func (p *poller) poll(ctx context.Context) {
-	w := p.w
-	spec := p.spec
+func (poller *poller) poll(ctx context.Context) {
+	watcher := poller.watcher
+	specification := poller.specification
 
-	msgs, err := w.opts.Adapter.FetchOnce(ctx, spec)
+	messages, err := watcher.options.Adapter.FetchOnce(ctx, specification)
 	if err != nil {
 		if ctx.Err() != nil {
 			return
 		}
-		w.count(spec, resultError)
-		w.opts.Health.FallbackFailed(spec, reasonPoll)
-		w.logError("rest fallback poll failed", err)
+		watcher.count(specification, resultError)
+		watcher.options.Health.FallbackFailed(specification, reasonPoll)
+		watcher.logError("rest fallback poll failed", err)
 		return
 	}
 
 	published := false
-	for _, m := range msgs {
+	for _, message := range messages {
 		// The adapter may answer more than was asked for; only the expired
 		// channel is republished.
-		if m.Channel != spec.Channel {
+		if message.Channel != specification.Channel {
 			continue
 		}
-		if !p.publish(ctx, m) {
+		if !poller.publish(ctx, message) {
 			return
 		}
 		published = true
@@ -184,71 +184,71 @@ func (p *poller) poll(ctx context.Context) {
 	if !published {
 		// The venue answered, but not with this value. That is missing data,
 		// not a zero, and it must not read as a working fallback.
-		w.count(spec, resultEmpty)
-		w.opts.Health.FallbackFailed(spec, reasonEmpty)
+		watcher.count(specification, resultEmpty)
+		watcher.options.Health.FallbackFailed(specification, reasonEmpty)
 	}
 }
 
 // publish writes one polled message, reporting whether it landed.
-func (p *poller) publish(ctx context.Context, m core.Message) bool {
-	w := p.w
+func (poller *poller) publish(ctx context.Context, message core.Message) bool {
+	watcher := poller.watcher
 
 	// A poll that was already in flight when the socket recovered must not
 	// land: it would put SOURCE_REST and DEGRADED back onto a stream that is
 	// healthy again, and reset the TTL from a source nobody is using.
-	if !w.owns(p) {
+	if !watcher.owns(poller) {
 		return false
 	}
 
-	env, ok := m.Proto.(interface{ GetEnv() *pb.Envelope })
-	if !ok || env.GetEnv() == nil {
-		w.count(p.spec, resultError)
-		w.opts.Health.FallbackFailed(p.spec, reasonEmpty)
+	enveloped, ok := message.Proto.(interface{ GetEnv() *manoochv1.Envelope })
+	if !ok || enveloped.GetEnv() == nil {
+		watcher.count(poller.specification, resultError)
+		watcher.options.Health.FallbackFailed(poller.specification, reasonEmpty)
 		return false
 	}
 
 	// The value is current again, which clears an earlier failure but does not
 	// end fallback: only a websocket message does that.
-	w.opts.Health.Polled(p.spec)
+	watcher.options.Health.Polled(poller.specification)
 
-	e := env.GetEnv()
+	envelope := enveloped.GetEnv()
 	// Same channel, same key, so a consumer has one code path. What differs is
 	// visible to anyone who looks: the source says REST and the status says
 	// this is not the socket.
-	e.Source = pb.Source_SOURCE_REST
-	e.Status, e.StatusReason = w.opts.Health.Status(p.spec)
+	envelope.Source = manoochv1.Source_SOURCE_REST
+	envelope.Status, envelope.StatusReason = watcher.options.Health.Status(poller.specification)
 
-	if err := w.opts.Publisher.Publish(ctx, m.Key, m.Proto, m.TTL); err != nil {
+	if err := watcher.options.Publisher.Publish(ctx, message.Key, message.Proto, message.TimeToLive); err != nil {
 		if ctx.Err() != nil {
 			return false
 		}
-		w.count(p.spec, resultError)
-		w.opts.Health.FallbackFailed(p.spec, reasonPoll)
+		watcher.count(poller.specification, resultError)
+		watcher.options.Health.FallbackFailed(poller.specification, reasonPoll)
 		return false
 	}
 
-	w.count(p.spec, resultOK)
-	w.setActiveMetric(p.spec, 1)
+	watcher.count(poller.specification, resultOK)
+	watcher.setActiveMetric(poller.specification, 1)
 	return true
 }
 
 // owns reports whether a poller is still the one serving its stream.
-func (w *Watcher) owns(p *poller) bool {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.active[p.spec] == p
+func (watcher *Watcher) owns(poller *poller) bool {
+	watcher.mutex.Lock()
+	defer watcher.mutex.Unlock()
+	return watcher.active[poller.specification] == poller
 }
 
 // count records one poll result.
-func (w *Watcher) count(spec core.StreamSpec, result string) {
-	w.opts.Metrics.FallbackPolls.WithLabelValues(w.opts.Venue, core.ChannelName(spec.Channel), result).Inc()
+func (watcher *Watcher) count(specification core.StreamSpec, result string) {
+	watcher.options.Metrics.FallbackPolls.WithLabelValues(watcher.options.Venue, core.ChannelName(specification.Channel), result).Inc()
 }
 
 // setActiveMetric records whether a stream is on REST.
-func (w *Watcher) setActiveMetric(spec core.StreamSpec, v float64) {
-	w.opts.Metrics.FallbackActive.WithLabelValues(
-		w.opts.Venue,
-		core.MarketTypeName(spec.Instrument.MarketType),
-		spec.Instrument.Canonical(),
-		core.ChannelName(spec.Channel)).Set(v)
+func (watcher *Watcher) setActiveMetric(specification core.StreamSpec, v float64) {
+	watcher.options.Metrics.FallbackActive.WithLabelValues(
+		watcher.options.Venue,
+		core.MarketTypeName(specification.Instrument.MarketType),
+		specification.Instrument.Canonical(),
+		core.ChannelName(specification.Channel)).Set(v)
 }

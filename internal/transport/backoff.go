@@ -44,21 +44,21 @@ type Policy struct {
 
 // Delay is how long to wait before the retry after attempt failures, counting
 // from zero: Delay(0) is the wait after the first failure.
-func (p Policy) Delay(attempt int) time.Duration {
-	ceiling := p.ceiling(attempt)
+func (policy Policy) Delay(attempt int) time.Duration {
+	ceiling := policy.ceiling(attempt)
 	if ceiling <= 0 {
 		return 0
 	}
-	switch p.Jitter {
+	switch policy.Jitter {
 	case JitterNone:
 		return ceiling
 	case JitterEqual:
-		half := ceiling / 2
-		return half + p.jitter(half)
+		duration := ceiling / 2
+		return duration + policy.jitter(duration)
 	default:
 		// Full jitter. The whole interval is in play, so two streams that
 		// failed on the same frame do not come back on the same frame either.
-		return p.jitter(ceiling)
+		return policy.jitter(ceiling)
 	}
 }
 
@@ -68,23 +68,23 @@ func (p Policy) Delay(attempt int) time.Duration {
 // a socket that has been failing for a day reaches an attempt count where
 // int64 nanoseconds overflow into a negative delay, which is a retry with no
 // wait at all — the storm this exists to prevent.
-func (p Policy) ceiling(attempt int) time.Duration {
-	if p.Initial <= 0 {
+func (policy Policy) ceiling(attempt int) time.Duration {
+	if policy.Initial <= 0 {
 		return 0
 	}
 	if attempt < 0 {
 		attempt = 0
 	}
-	mult := p.Multiplier
+	mult := policy.Multiplier
 	if mult < 1 {
 		mult = 1
 	}
-	max := float64(p.Max)
+	max := float64(policy.Max)
 	if max <= 0 {
 		max = math.MaxFloat64
 	}
 
-	c := float64(p.Initial) * math.Pow(mult, float64(attempt))
+	c := float64(policy.Initial) * math.Pow(mult, float64(attempt))
 	if math.IsNaN(c) || c > max {
 		c = max
 	}
@@ -95,39 +95,39 @@ func (p Policy) ceiling(attempt int) time.Duration {
 }
 
 // jitter returns a uniform duration in [0, d).
-func (p Policy) jitter(d time.Duration) time.Duration {
-	if d <= 0 {
+func (policy Policy) jitter(duration time.Duration) time.Duration {
+	if duration <= 0 {
 		return 0
 	}
-	f := p.Rand
+	f := policy.Rand
 	if f == nil {
 		f = rand.Float64
 	}
-	return time.Duration(f() * float64(d))
+	return time.Duration(f() * float64(duration))
 }
 
 // Sleep waits for Delay(attempt) or until ctx ends, reporting whether the wait
 // completed. A false return means the caller is shutting down and must not
 // retry.
-func (p Policy) Sleep(ctx context.Context, attempt int) bool {
-	return Wait(ctx, p.Delay(attempt))
+func (policy Policy) Sleep(ctx context.Context, attempt int) bool {
+	return Wait(ctx, policy.Delay(attempt))
 }
 
 // Wait sleeps for d or until ctx ends, reporting whether the wait completed.
 //
 // It is here rather than inline at each call site because time.Sleep in a
 // supervision loop is a shutdown that hangs for the length of the backoff.
-func Wait(ctx context.Context, d time.Duration) bool {
+func Wait(ctx context.Context, duration time.Duration) bool {
 	if ctx.Err() != nil {
 		return false
 	}
-	if d <= 0 {
+	if duration <= 0 {
 		return true
 	}
-	t := time.NewTimer(d)
-	defer t.Stop()
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
 	select {
-	case <-t.C:
+	case <-timer.C:
 		return true
 	case <-ctx.Done():
 		return false

@@ -26,7 +26,7 @@ it was for reports `DEGRADED` or `STALE`.
 ## How it is used
 
 `cmd/manooch-feed` builds one `LocalLimiter` per process from the venue file and
-hands it to `adapter.New` through `adapter.Deps`. The adapters call `Allow`
+hands it to `adapter.New` through `adapter.Dependencies`. The adapters call `Allow`
 themselves: only they know what a venue charges for a call.
 
 | Operation | When | Kind | Venue |

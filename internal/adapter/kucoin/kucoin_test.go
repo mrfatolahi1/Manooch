@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/you/manooch/gen/manoochv1"
+	"github.com/you/manooch/gen/manoochv1"
 	"github.com/you/manooch/internal/adapter/kucoin"
 	"github.com/you/manooch/internal/core"
 	"github.com/you/manooch/internal/core/coretest"
@@ -24,13 +24,13 @@ import (
 // must normalize to.
 var fixtureDir = filepath.Join("..", "..", "..", "testdata", "kucoin")
 
-// ttls are the venue's real shape: mark and index at one second, funding at one
-// minute, each times health.ttl_multiplier. One number for all three would
-// expire the funding key between updates.
-var ttls = map[pb.Channel]time.Duration{
-	pb.Channel_CHANNEL_MARK_PRICE:  3 * time.Second,
-	pb.Channel_CHANNEL_INDEX_PRICE: 3 * time.Second,
-	pb.Channel_CHANNEL_FUNDING:     180 * time.Second,
+// The time-to-live values are the venue's real shape: mark and index at one
+// second, funding at one minute, each times health.ttl_multiplier. One number
+// for all three would expire the funding key between updates.
+var timeToLives = map[manoochv1.Channel]time.Duration{
+	manoochv1.Channel_CHANNEL_MARK_PRICE:  3 * time.Second,
+	manoochv1.Channel_CHANNEL_INDEX_PRICE: 3 * time.Second,
+	manoochv1.Channel_CHANNEL_FUNDING:     180 * time.Second,
 }
 
 func newAdapter(t *testing.T) *kucoin.Adapter {
@@ -40,41 +40,41 @@ func newAdapter(t *testing.T) *kucoin.Adapter {
 
 // newAdapterWith fills in whatever a case did not set, so each test names only
 // what it is actually about.
-func newAdapterWith(t *testing.T, opts kucoin.Options) *kucoin.Adapter {
+func newAdapterWith(t *testing.T, options kucoin.Options) *kucoin.Adapter {
 	t.Helper()
 
-	if opts.WSEndpoint == "" {
-		opts.WSEndpoint = "https://api-futures.kucoin.com"
+	if options.WebSocketEndpoint == "" {
+		options.WebSocketEndpoint = "https://api-futures.kucoin.com"
 	}
-	if opts.RESTEndpoint == "" {
-		opts.RESTEndpoint = "https://api-futures.kucoin.com"
+	if options.RESTEndpoint == "" {
+		options.RESTEndpoint = "https://api-futures.kucoin.com"
 	}
-	if opts.SymbolOverrides == nil {
-		opts.SymbolOverrides = map[string]string{"BTC_USDT": "XBTUSDTM"}
+	if options.SymbolOverrides == nil {
+		options.SymbolOverrides = map[string]string{"BTC_USDT": "XBTUSDTM"}
 	}
-	if opts.MaxStreamsPerSocket == 0 {
-		opts.MaxStreamsPerSocket = 50
+	if options.MaxStreamsPerSocket == 0 {
+		options.MaxStreamsPerSocket = 50
 	}
-	if opts.TTLs == nil {
-		opts.TTLs = ttls
+	if options.TimeToLive == nil {
+		options.TimeToLive = timeToLives
 	}
-	if opts.ConnectID == nil {
-		opts.ConnectID = func() string { return "test-connect-id" }
+	if options.ConnectID == nil {
+		options.ConnectID = func() string { return "test-connect-id" }
 	}
-	a, err := kucoin.New(opts)
+	adapter, err := kucoin.New(options)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	return a
+	return adapter
 }
 
-func spec(t *testing.T, symbol string, ch pb.Channel) core.StreamSpec {
+func specification(t *testing.T, symbol string, channel manoochv1.Channel) core.StreamSpec {
 	t.Helper()
-	ref, err := core.ParseCanonical(symbol, kucoin.MarketType)
+	reference, err := core.ParseCanonical(symbol, kucoin.MarketType)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return core.StreamSpec{Instrument: ref, Channel: ch}
+	return core.StreamSpec{Instrument: reference, Channel: channel}
 }
 
 // ---------- symbols ----------
@@ -82,71 +82,71 @@ func spec(t *testing.T, symbol string, ch pb.Channel) core.StreamSpec {
 // TestVenueSymbol: the rule is {BASE}{QUOTE}M, and symbol_overrides is where
 // the assets KuCoin spells differently are stated exactly.
 func TestVenueSymbol(t *testing.T) {
-	a := newAdapter(t)
+	adapter := newAdapter(t)
 	cases := []struct{ canonical, want string }{
 		{"BTC_USDT", "XBTUSDTM"}, // via symbol_overrides: bitcoin is XBT here
 		{"ETH_USDT", "ETHUSDTM"}, // via the rule
 		{"SOL_USDC", "SOLUSDCM"}, //
 		{"1000PEPE_USDT", "1000PEPEUSDTM"},
 	}
-	for _, tc := range cases {
-		ref, err := core.ParseCanonical(tc.canonical, kucoin.MarketType)
+	for _, testCase := range cases {
+		reference, err := core.ParseCanonical(testCase.canonical, kucoin.MarketType)
 		if err != nil {
 			t.Fatal(err)
 		}
-		got, err := a.VenueSymbol(ref)
+		got, err := adapter.VenueSymbol(reference)
 		if err != nil {
-			t.Errorf("VenueSymbol(%s): %v", tc.canonical, err)
+			t.Errorf("VenueSymbol(%s): %v", testCase.canonical, err)
 			continue
 		}
-		if got != tc.want {
-			t.Errorf("VenueSymbol(%s) = %q, want %q", tc.canonical, got, tc.want)
+		if got != testCase.want {
+			t.Errorf("VenueSymbol(%s) = %q, want %q", testCase.canonical, got, testCase.want)
 		}
 	}
 
-	spotRef, err := core.ParseCanonical("BTC_USDT", pb.MarketType_MARKET_TYPE_SPOT)
+	spotRef, err := core.ParseCanonical("BTC_USDT", manoochv1.MarketType_MARKET_TYPE_SPOT)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.VenueSymbol(spotRef); err == nil {
+	if _, err := adapter.VenueSymbol(spotRef); err == nil {
 		t.Error("VenueSymbol accepted a SPOT instrument")
 	}
 }
 
 func TestParseVenueSymbol(t *testing.T) {
-	a := newAdapter(t)
+	adapter := newAdapter(t)
 	cases := []struct{ in, want string }{
 		{"XBTUSDTM", "BTC_USDT"}, // the reversed override
 		{"ETHUSDTM", "ETH_USDT"},
 		{"SOLUSDCM", "SOL_USDC"},
 		{"ATOMUSDTM", "ATOM_USDT"}, // a base that itself ends in M
 	}
-	for _, tc := range cases {
-		ref, err := a.ParseVenueSymbol(tc.in, kucoin.MarketType)
+	for _, testCase := range cases {
+		reference, err := adapter.ParseVenueSymbol(testCase.in, kucoin.MarketType)
 		if err != nil {
-			t.Errorf("ParseVenueSymbol(%s): %v", tc.in, err)
+			t.Errorf("ParseVenueSymbol(%s): %v", testCase.in, err)
 			continue
 		}
-		if got := ref.Canonical(); got != tc.want {
-			t.Errorf("ParseVenueSymbol(%s) = %q, want %q", tc.in, got, tc.want)
+		if got := reference.Canonical(); got != testCase.want {
+			t.Errorf("ParseVenueSymbol(%s) = %q, want %q", testCase.in, got, testCase.want)
 		}
-		if ref.Settle != ref.Quote {
-			t.Errorf("ParseVenueSymbol(%s) settle = %q, want the quote %q", tc.in, ref.Settle, ref.Quote)
+		if reference.Settle != reference.Quote {
+			t.Errorf("ParseVenueSymbol(%s) settle = %q, want the quote %q", testCase.in, reference.Settle, reference.Quote)
 		}
 	}
 
 	// Without the M it is an index or a spot pair, and its price is not a
 	// perpetual's.
-	if _, err := a.ParseVenueSymbol("XBTUSDT", kucoin.MarketType); err == nil {
+	if _, err := adapter.ParseVenueSymbol("XBTUSDT", kucoin.MarketType); err == nil {
 		t.Error("ParseVenueSymbol accepted a symbol with no M suffix")
 	}
-	if _, err := a.ParseVenueSymbol("XBTXYZM", kucoin.MarketType); err == nil {
+	if _, err := adapter.ParseVenueSymbol("XBTXYZM", kucoin.MarketType); err == nil {
 		t.Error("ParseVenueSymbol accepted an unknown quote asset")
 	}
-	if _, err := a.ParseVenueSymbol("", kucoin.MarketType); err == nil {
+	if _, err := adapter.ParseVenueSymbol("", kucoin.MarketType); err == nil {
 		t.Error("ParseVenueSymbol accepted an empty symbol")
 	}
-	if _, err := a.ParseVenueSymbol("XBTUSDTM", pb.MarketType_MARKET_TYPE_SPOT); err == nil {
+	if _, err := adapter.ParseVenueSymbol("XBTUSDTM", manoochv1.MarketType_MARKET_TYPE_SPOT); err == nil {
 		t.Error("ParseVenueSymbol accepted a market type this adapter does not serve")
 	}
 }
@@ -155,22 +155,22 @@ func TestParseVenueSymbol(t *testing.T) {
 // back. A one-way mapping puts REST responses under keys the websocket never
 // writes to.
 func TestRoundTripSymbols(t *testing.T) {
-	a := newAdapter(t)
+	adapter := newAdapter(t)
 	for _, canonical := range []string{"BTC_USDT", "ETH_USDT", "SOL_USDT", "ATOM_USDT", "AVAX_USDC"} {
-		ref, err := core.ParseCanonical(canonical, kucoin.MarketType)
+		reference, err := core.ParseCanonical(canonical, kucoin.MarketType)
 		if err != nil {
 			t.Fatal(err)
 		}
-		sym, err := a.VenueSymbol(ref)
+		symbol, err := adapter.VenueSymbol(reference)
 		if err != nil {
 			t.Fatalf("VenueSymbol(%s): %v", canonical, err)
 		}
-		back, err := a.ParseVenueSymbol(sym, kucoin.MarketType)
+		back, err := adapter.ParseVenueSymbol(symbol, kucoin.MarketType)
 		if err != nil {
-			t.Fatalf("ParseVenueSymbol(%s): %v", sym, err)
+			t.Fatalf("ParseVenueSymbol(%s): %v", symbol, err)
 		}
-		if back != ref {
-			t.Errorf("%s -> %s -> %s", canonical, sym, back)
+		if back != reference {
+			t.Errorf("%s -> %s -> %s", canonical, symbol, back)
 		}
 	}
 }
@@ -181,23 +181,23 @@ func TestRoundTripSymbols(t *testing.T) {
 // so subscribing per channel would spend three of the venue's subscription
 // slots and deliver each frame three times.
 func TestPlanSubscriptionsDeduplicates(t *testing.T) {
-	a := newAdapter(t)
-	var specs []core.StreamSpec
-	for _, sym := range []string{"ETH_USDT", "BTC_USDT"} {
-		for _, ch := range kucoin.Channels {
-			specs = append(specs, spec(t, sym, ch))
+	adapter := newAdapter(t)
+	var specifications []core.StreamSpec
+	for _, symbol := range []string{"ETH_USDT", "BTC_USDT"} {
+		for _, channel := range kucoin.Channels {
+			specifications = append(specifications, specification(t, symbol, channel))
 		}
 	}
 
-	plans, err := a.PlanSubscriptions(specs)
+	plans, err := adapter.PlanSubscriptions(specifications)
 	if err != nil {
 		t.Fatalf("PlanSubscriptions: %v", err)
 	}
 	if len(plans) != 1 {
 		t.Fatalf("plans = %d, want 1", len(plans))
 	}
-	if len(plans[0].Specs) != 6 {
-		t.Errorf("plan carries %d specs, want 6", len(plans[0].Specs))
+	if len(plans[0].Specifications) != 6 {
+		t.Errorf("plan carries %d specs, want 6", len(plans[0].Specifications))
 	}
 	if plans[0].ID != "kucoin-0" {
 		t.Errorf("plan id = %q", plans[0].ID)
@@ -208,40 +208,40 @@ func TestPlanSubscriptionsDeduplicates(t *testing.T) {
 // lines, so the same config must produce the same IDs whatever order the
 // streams arrive in.
 func TestPlanSubscriptionsIsStable(t *testing.T) {
-	a := newAdapter(t)
+	adapter := newAdapter(t)
 	forward := []core.StreamSpec{
-		spec(t, "BTC_USDT", pb.Channel_CHANNEL_MARK_PRICE),
-		spec(t, "ETH_USDT", pb.Channel_CHANNEL_MARK_PRICE),
-		spec(t, "SOL_USDT", pb.Channel_CHANNEL_FUNDING),
+		specification(t, "BTC_USDT", manoochv1.Channel_CHANNEL_MARK_PRICE),
+		specification(t, "ETH_USDT", manoochv1.Channel_CHANNEL_MARK_PRICE),
+		specification(t, "SOL_USDT", manoochv1.Channel_CHANNEL_FUNDING),
 	}
 	reversed := []core.StreamSpec{forward[2], forward[1], forward[0]}
 
-	a1, err := a.PlanSubscriptions(forward)
+	firstPlans, err := adapter.PlanSubscriptions(forward)
 	if err != nil {
 		t.Fatal(err)
 	}
-	a2, err := a.PlanSubscriptions(reversed)
+	secondPlans, err := adapter.PlanSubscriptions(reversed)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(a1) != len(a2) {
-		t.Fatalf("plans = %d and %d", len(a1), len(a2))
+	if len(firstPlans) != len(secondPlans) {
+		t.Fatalf("plans = %d and %d", len(firstPlans), len(secondPlans))
 	}
-	for i := range a1 {
-		if a1[i].ID != a2[i].ID {
-			t.Errorf("plan %d id = %q and %q", i, a1[i].ID, a2[i].ID)
+	for i := range firstPlans {
+		if firstPlans[i].ID != secondPlans[i].ID {
+			t.Errorf("plan %d id = %q and %q", i, firstPlans[i].ID, secondPlans[i].ID)
 		}
 	}
 }
 
 func TestPlanSubscriptionsChunks(t *testing.T) {
-	a := newAdapterWith(t, kucoin.Options{MaxStreamsPerSocket: 2})
+	adapter := newAdapterWith(t, kucoin.Options{MaxStreamsPerSocket: 2})
 
-	var specs []core.StreamSpec
-	for _, sym := range []string{"BTC_USDT", "ETH_USDT", "SOL_USDT", "XRP_USDT", "ADA_USDT"} {
-		specs = append(specs, spec(t, sym, pb.Channel_CHANNEL_MARK_PRICE))
+	var specifications []core.StreamSpec
+	for _, symbol := range []string{"BTC_USDT", "ETH_USDT", "SOL_USDT", "XRP_USDT", "ADA_USDT"} {
+		specifications = append(specifications, specification(t, symbol, manoochv1.Channel_CHANNEL_MARK_PRICE))
 	}
-	plans, err := a.PlanSubscriptions(specs)
+	plans, err := adapter.PlanSubscriptions(specifications)
 	if err != nil {
 		t.Fatalf("PlanSubscriptions: %v", err)
 	}
@@ -253,19 +253,19 @@ func TestPlanSubscriptionsChunks(t *testing.T) {
 // TestPlanSubscriptionsRejectsUnservedStreams: a stream this adapter cannot
 // carry must be a startup error, not a key nobody ever writes.
 func TestPlanSubscriptionsRejectsUnservedStreams(t *testing.T) {
-	a := newAdapter(t)
+	adapter := newAdapter(t)
 
-	spotRef, err := core.ParseCanonical("BTC_USDT", pb.MarketType_MARKET_TYPE_SPOT)
+	spotRef, err := core.ParseCanonical("BTC_USDT", manoochv1.MarketType_MARKET_TYPE_SPOT)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.PlanSubscriptions([]core.StreamSpec{
-		{Instrument: spotRef, Channel: pb.Channel_CHANNEL_MARK_PRICE},
+	if _, err := adapter.PlanSubscriptions([]core.StreamSpec{
+		{Instrument: spotRef, Channel: manoochv1.Channel_CHANNEL_MARK_PRICE},
 	}); err == nil {
 		t.Error("PlanSubscriptions accepted a SPOT stream")
 	}
-	if _, err := a.PlanSubscriptions([]core.StreamSpec{
-		spec(t, "BTC_USDT", pb.Channel_CHANNEL_METADATA),
+	if _, err := adapter.PlanSubscriptions([]core.StreamSpec{
+		specification(t, "BTC_USDT", manoochv1.Channel_CHANNEL_METADATA),
 	}); err == nil {
 		t.Error("PlanSubscriptions accepted a metadata stream this adapter does not serve")
 	}
@@ -273,16 +273,16 @@ func TestPlanSubscriptionsRejectsUnservedStreams(t *testing.T) {
 
 func TestNewRejectsIncompleteOptions(t *testing.T) {
 	full := kucoin.Options{
-		WSEndpoint:          "https://api-futures.kucoin.com",
+		WebSocketEndpoint:   "https://api-futures.kucoin.com",
 		MaxStreamsPerSocket: 50,
-		TTLs:                ttls,
+		TimeToLive:          timeToLives,
 	}
 	if _, err := kucoin.New(full); err != nil {
 		t.Fatalf("New with complete options: %v", err)
 	}
 
 	noEndpoint := full
-	noEndpoint.WSEndpoint = ""
+	noEndpoint.WebSocketEndpoint = ""
 	if _, err := kucoin.New(noEndpoint); err == nil {
 		t.Error("New accepted an empty ws endpoint")
 	}
@@ -295,22 +295,22 @@ func TestNewRejectsIncompleteOptions(t *testing.T) {
 
 	// A missing TTL would publish a key with no expiry, which reports a dead
 	// stream as fresh forever.
-	missingTTL := full
-	missingTTL.TTLs = map[pb.Channel]time.Duration{pb.Channel_CHANNEL_MARK_PRICE: time.Second}
-	if _, err := kucoin.New(missingTTL); err == nil {
+	missingTimeToLive := full
+	missingTimeToLive.TimeToLive = map[manoochv1.Channel]time.Duration{manoochv1.Channel_CHANNEL_MARK_PRICE: time.Second}
+	if _, err := kucoin.New(missingTimeToLive); err == nil {
 		t.Error("New accepted options with no funding TTL")
 	}
 }
 
 func TestRESTCost(t *testing.T) {
-	a := newAdapter(t)
-	if got := a.RESTCost(core.OpFetchOnce); got <= 0 {
+	adapter := newAdapter(t)
+	if got := adapter.RESTCost(core.OpFetchOnce); got <= 0 {
 		t.Errorf("RESTCost(fetch_once) = %d", got)
 	}
-	if got := a.RESTCost(core.OpFetchMetadata); got <= 0 {
+	if got := adapter.RESTCost(core.OpFetchMetadata); got <= 0 {
 		t.Errorf("RESTCost(fetch_metadata) = %d", got)
 	}
-	if got := a.RESTCost(core.OpUnspecified); got != 0 {
+	if got := adapter.RESTCost(core.OpUnspecified); got != 0 {
 		t.Errorf("RESTCost(unspecified) = %d, want 0", got)
 	}
 }
@@ -321,26 +321,26 @@ func TestRESTCost(t *testing.T) {
 func bulletServer(t *testing.T, body func() (int, string)) (*httptest.Server, *int) {
 	t.Helper()
 	calls := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/bullet-public" {
-			t.Errorf("bullet requested %q", r.URL.Path)
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/api/v1/bullet-public" {
+			t.Errorf("bullet requested %q", request.URL.Path)
 		}
-		if r.Method != http.MethodPost {
-			t.Errorf("bullet method %q, want POST", r.Method)
+		if request.Method != http.MethodPost {
+			t.Errorf("bullet method %q, want POST", request.Method)
 		}
 		// Public means public: no key, no signature, no session.
 		for _, h := range []string{"KC-API-KEY", "KC-API-SIGN", "KC-API-PASSPHRASE", "Authorization"} {
-			if r.Header.Get(h) != "" {
+			if request.Header.Get(h) != "" {
 				t.Errorf("bullet sent %s; this endpoint is unauthenticated", h)
 			}
 		}
 		calls++
 		code, b := body()
-		w.WriteHeader(code)
-		_, _ = w.Write([]byte(b))
+		response.WriteHeader(code)
+		_, _ = response.Write([]byte(b))
 	}))
-	t.Cleanup(srv.Close)
-	return srv, &calls
+	t.Cleanup(server.Close)
+	return server, &calls
 }
 
 func bulletBody(t *testing.T) string {
@@ -359,21 +359,21 @@ type acking struct {
 	t *testing.T
 }
 
-func (c *acking) Write(ctx context.Context, b []byte) error {
-	if err := c.Conn.Write(ctx, b); err != nil {
+func (connection *acking) Write(ctx context.Context, b []byte) error {
+	if err := connection.Conn.Write(ctx, b); err != nil {
 		return err
 	}
-	var req struct {
+	var request struct {
 		ID    string `json:"id"`
 		Type  string `json:"type"`
 		Topic string `json:"topic"`
 	}
-	if err := json.Unmarshal(b, &req); err != nil {
-		c.t.Errorf("frame written to the socket is not json: %s", b)
+	if err := json.Unmarshal(b, &request); err != nil {
+		connection.t.Errorf("frame written to the socket is not json: %s", b)
 		return nil
 	}
-	if req.Type == "subscribe" {
-		c.Push([]byte(`{"id":"` + req.ID + `","type":"ack"}`))
+	if request.Type == "subscribe" {
+		connection.Push([]byte(`{"id":"` + request.ID + `","type":"ack"}`))
 	}
 	return nil
 }
@@ -382,33 +382,33 @@ func (c *acking) Write(ctx context.Context, b []byte) error {
 // call for a token, a socket built from what it answered, and a subscription
 // per topic that is acknowledged before Dial returns.
 func TestDialBootstrapsAndSubscribes(t *testing.T) {
-	srv, calls := bulletServer(t, func() (int, string) { return http.StatusOK, bulletBody(t) })
+	server, calls := bulletServer(t, func() (int, string) { return http.StatusOK, bulletBody(t) })
 
 	var dialedURL string
-	conn := &acking{Conn: coretest.NewConn(), t: t}
-	a := newAdapterWith(t, kucoin.Options{
-		WSEndpoint: srv.URL,
-		Dial: func(_ context.Context, o transport.Options) (core.Conn, error) {
-			dialedURL = o.URL
+	ackingConn := &acking{Conn: coretest.NewConn(), t: t}
+	adapter := newAdapterWith(t, kucoin.Options{
+		WebSocketEndpoint: server.URL,
+		Dial: func(_ context.Context, options transport.Options) (core.Conn, error) {
+			dialedURL = options.URL
 			// The welcome frame arrives before anything we sent.
-			conn.Push([]byte(`{"id":"test-connect-id","type":"welcome"}`))
-			return conn, nil
+			ackingConn.Push([]byte(`{"id":"test-connect-id","type":"welcome"}`))
+			return ackingConn, nil
 		},
 	})
 
-	plans, err := a.PlanSubscriptions([]core.StreamSpec{
-		spec(t, "BTC_USDT", pb.Channel_CHANNEL_MARK_PRICE),
-		spec(t, "ETH_USDT", pb.Channel_CHANNEL_MARK_PRICE),
+	plans, err := adapter.PlanSubscriptions([]core.StreamSpec{
+		specification(t, "BTC_USDT", manoochv1.Channel_CHANNEL_MARK_PRICE),
+		specification(t, "ETH_USDT", manoochv1.Channel_CHANNEL_MARK_PRICE),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	c, err := a.Dial(context.Background(), plans[0])
+	connection, err := adapter.Dial(context.Background(), plans[0])
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
-	defer c.Close()
+	defer connection.Close()
 
 	if *calls != 1 {
 		t.Errorf("bullet called %d times, want 1", *calls)
@@ -425,24 +425,24 @@ func TestDialBootstrapsAndSubscribes(t *testing.T) {
 
 	// One subscribe per topic, with response:true — without it a refused
 	// subscription looks exactly like one that took and has nothing to say.
-	writes := conn.Writes()
+	writes := ackingConn.Writes()
 	var topics []string
 	for _, w := range writes {
-		var req struct {
+		var request struct {
 			Type     string `json:"type"`
 			Topic    string `json:"topic"`
 			Response bool   `json:"response"`
 		}
-		if err := json.Unmarshal(w, &req); err != nil {
+		if err := json.Unmarshal(w, &request); err != nil {
 			t.Fatalf("write is not json: %s", w)
 		}
-		if req.Type != "subscribe" {
+		if request.Type != "subscribe" {
 			continue
 		}
-		if !req.Response {
-			t.Errorf("subscribe to %s did not ask for an acknowledgement", req.Topic)
+		if !request.Response {
+			t.Errorf("subscribe to %s did not ask for an acknowledgement", request.Topic)
 		}
-		topics = append(topics, req.Topic)
+		topics = append(topics, request.Topic)
 	}
 	want := []string{"/contract/instrument:ETHUSDTM", "/contract/instrument:XBTUSDTM"}
 	if len(topics) != len(want) {
@@ -460,7 +460,7 @@ func TestDialBootstrapsAndSubscribes(t *testing.T) {
 // like the venue being down.
 func TestEveryDialFetchesAFreshToken(t *testing.T) {
 	var issued []string
-	srv, calls := bulletServer(t, func() (int, string) {
+	server, calls := bulletServer(t, func() (int, string) {
 		token := "token-" + strings.Repeat("x", len(issued)+1)
 		issued = append(issued, token)
 		return http.StatusOK, `{"code":"200000","data":{"token":"` + token + `","instanceServers":[
@@ -468,25 +468,25 @@ func TestEveryDialFetchesAFreshToken(t *testing.T) {
 	})
 
 	var dialed []string
-	a := newAdapterWith(t, kucoin.Options{
-		WSEndpoint: srv.URL,
-		Dial: func(_ context.Context, o transport.Options) (core.Conn, error) {
-			dialed = append(dialed, o.URL)
-			c := &acking{Conn: coretest.NewConn(), t: t}
-			return c, nil
+	adapter := newAdapterWith(t, kucoin.Options{
+		WebSocketEndpoint: server.URL,
+		Dial: func(_ context.Context, options transport.Options) (core.Conn, error) {
+			dialed = append(dialed, options.URL)
+			connection := &acking{Conn: coretest.NewConn(), t: t}
+			return connection, nil
 		},
 	})
-	plans, err := a.PlanSubscriptions([]core.StreamSpec{spec(t, "BTC_USDT", pb.Channel_CHANNEL_MARK_PRICE)})
+	plans, err := adapter.PlanSubscriptions([]core.StreamSpec{specification(t, "BTC_USDT", manoochv1.Channel_CHANNEL_MARK_PRICE)})
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	for i := range 3 {
-		c, err := a.Dial(context.Background(), plans[0])
+		connection, err := adapter.Dial(context.Background(), plans[0])
 		if err != nil {
 			t.Fatalf("dial %d: %v", i, err)
 		}
-		c.Close()
+		connection.Close()
 	}
 
 	if *calls != 3 {
@@ -504,23 +504,23 @@ func TestEveryDialFetchesAFreshToken(t *testing.T) {
 // would sit there consuming a connection slot and delivering nothing, which
 // from above is indistinguishable from a venue that went quiet.
 func TestDialRefusedSubscriptionFails(t *testing.T) {
-	srv, _ := bulletServer(t, func() (int, string) { return http.StatusOK, bulletBody(t) })
+	server, _ := bulletServer(t, func() (int, string) { return http.StatusOK, bulletBody(t) })
 
-	conn := coretest.NewConn()
-	conn.Push([]byte(`{"id":"sub-0","type":"error","code":404,"data":"topic /contract/instrument:XBTUSDTM is not supported"}`))
-	a := newAdapterWith(t, kucoin.Options{
-		WSEndpoint: srv.URL,
-		Dial:       func(context.Context, transport.Options) (core.Conn, error) { return conn, nil },
+	connection := coretest.NewConn()
+	connection.Push([]byte(`{"id":"sub-0","type":"error","code":404,"data":"topic /contract/instrument:XBTUSDTM is not supported"}`))
+	adapter := newAdapterWith(t, kucoin.Options{
+		WebSocketEndpoint: server.URL,
+		Dial:              func(context.Context, transport.Options) (core.Conn, error) { return connection, nil },
 	})
-	plans, err := a.PlanSubscriptions([]core.StreamSpec{spec(t, "BTC_USDT", pb.Channel_CHANNEL_MARK_PRICE)})
+	plans, err := adapter.PlanSubscriptions([]core.StreamSpec{specification(t, "BTC_USDT", manoochv1.Channel_CHANNEL_MARK_PRICE)})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := a.Dial(context.Background(), plans[0]); err == nil {
+	if _, err := adapter.Dial(context.Background(), plans[0]); err == nil {
 		t.Fatal("Dial succeeded against a refused subscription")
 	}
-	if !conn.IsClosed() {
+	if !connection.IsClosed() {
 		t.Error("the socket was left open after a failed subscription")
 	}
 }
@@ -528,23 +528,23 @@ func TestDialRefusedSubscriptionFails(t *testing.T) {
 // TestDialTimesOutWaitingForAcks: a socket that opens and never acknowledges is
 // not a connection, and Dial must not hand one back.
 func TestDialTimesOutWaitingForAcks(t *testing.T) {
-	srv, _ := bulletServer(t, func() (int, string) { return http.StatusOK, bulletBody(t) })
+	server, _ := bulletServer(t, func() (int, string) { return http.StatusOK, bulletBody(t) })
 
-	conn := coretest.NewConn()
-	a := newAdapterWith(t, kucoin.Options{
-		WSEndpoint:       srv.URL,
-		SubscribeTimeout: 50 * time.Millisecond,
-		Dial:             func(context.Context, transport.Options) (core.Conn, error) { return conn, nil },
+	connection := coretest.NewConn()
+	adapter := newAdapterWith(t, kucoin.Options{
+		WebSocketEndpoint: server.URL,
+		SubscribeTimeout:  50 * time.Millisecond,
+		Dial:              func(context.Context, transport.Options) (core.Conn, error) { return connection, nil },
 	})
-	plans, err := a.PlanSubscriptions([]core.StreamSpec{spec(t, "BTC_USDT", pb.Channel_CHANNEL_MARK_PRICE)})
+	plans, err := adapter.PlanSubscriptions([]core.StreamSpec{specification(t, "BTC_USDT", manoochv1.Channel_CHANNEL_MARK_PRICE)})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := a.Dial(context.Background(), plans[0]); err == nil {
+	if _, err := adapter.Dial(context.Background(), plans[0]); err == nil {
 		t.Fatal("Dial succeeded with no acknowledgement")
 	}
-	if !conn.IsClosed() {
+	if !connection.IsClosed() {
 		t.Error("the socket was left open after the handshake timed out")
 	}
 }
@@ -567,19 +567,19 @@ func TestBulletFailureIsADialFailure(t *testing.T) {
 		"not json": func() (int, string) { return http.StatusOK, `<html>maintenance</html>` },
 	} {
 		t.Run(name, func(t *testing.T) {
-			srv, _ := bulletServer(t, body)
-			a := newAdapterWith(t, kucoin.Options{
-				WSEndpoint: srv.URL,
+			server, _ := bulletServer(t, body)
+			adapter := newAdapterWith(t, kucoin.Options{
+				WebSocketEndpoint: server.URL,
 				Dial: func(context.Context, transport.Options) (core.Conn, error) {
 					t.Error("a socket was dialed without a usable bullet")
 					return nil, nil
 				},
 			})
-			plans, err := a.PlanSubscriptions([]core.StreamSpec{spec(t, "BTC_USDT", pb.Channel_CHANNEL_MARK_PRICE)})
+			plans, err := adapter.PlanSubscriptions([]core.StreamSpec{specification(t, "BTC_USDT", manoochv1.Channel_CHANNEL_MARK_PRICE)})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := a.Dial(context.Background(), plans[0]); err == nil {
+			if _, err := adapter.Dial(context.Background(), plans[0]); err == nil {
 				t.Error("Dial succeeded with no usable bullet")
 			}
 		})
@@ -589,22 +589,22 @@ func TestBulletFailureIsADialFailure(t *testing.T) {
 // TestLimiterDenialStopsTheDial: the bullet call costs budget on every
 // reconnect, so a spent budget must stop the dial rather than spend it anyway.
 func TestLimiterDenialStopsTheDial(t *testing.T) {
-	srv, calls := bulletServer(t, func() (int, string) { return http.StatusOK, bulletBody(t) })
+	server, calls := bulletServer(t, func() (int, string) { return http.StatusOK, bulletBody(t) })
 
-	a := newAdapterWith(t, kucoin.Options{
-		WSEndpoint: srv.URL,
-		Limiter:    denyingLimiter{},
+	adapter := newAdapterWith(t, kucoin.Options{
+		WebSocketEndpoint: server.URL,
+		Limiter:           denyingLimiter{},
 		Dial: func(context.Context, transport.Options) (core.Conn, error) {
 			t.Error("a socket was dialed with no connect budget")
 			return nil, nil
 		},
 	})
-	plans, err := a.PlanSubscriptions([]core.StreamSpec{spec(t, "BTC_USDT", pb.Channel_CHANNEL_MARK_PRICE)})
+	plans, err := adapter.PlanSubscriptions([]core.StreamSpec{specification(t, "BTC_USDT", manoochv1.Channel_CHANNEL_MARK_PRICE)})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := a.Dial(context.Background(), plans[0]); !errors.Is(err, ratelimit.ErrBudgetExhausted) {
+	if _, err := adapter.Dial(context.Background(), plans[0]); !errors.Is(err, ratelimit.ErrBudgetExhausted) {
 		t.Errorf("Dial = %v, want ErrBudgetExhausted", err)
 	}
 	if *calls != 0 {
@@ -632,29 +632,29 @@ func (denyingLimiter) Used(string, ratelimit.LimitKind) (int, int) { return 0, 0
 func TestStalledVenueDoesNotParkTheDial(t *testing.T) {
 	stalled := make(chan struct{})
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		<-stalled // accept the request and answer nothing
 	}))
-	t.Cleanup(srv.Close)
+	t.Cleanup(server.Close)
 	// Registered after the server's own cleanup so it runs before it: Close
 	// waits for outstanding requests, and this is what lets that one finish.
 	t.Cleanup(func() { close(stalled) })
 
-	a := newAdapterWith(t, kucoin.Options{
-		WSEndpoint:  srv.URL,
-		HTTPTimeout: 200 * time.Millisecond,
+	adapter := newAdapterWith(t, kucoin.Options{
+		WebSocketEndpoint: server.URL,
+		HTTPTimeout:       200 * time.Millisecond,
 		Dial: func(context.Context, transport.Options) (core.Conn, error) {
 			t.Error("a socket was dialed without a bullet")
 			return nil, nil
 		},
 	})
-	plans, err := a.PlanSubscriptions([]core.StreamSpec{spec(t, "BTC_USDT", pb.Channel_CHANNEL_MARK_PRICE)})
+	plans, err := adapter.PlanSubscriptions([]core.StreamSpec{specification(t, "BTC_USDT", manoochv1.Channel_CHANNEL_MARK_PRICE)})
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	done := make(chan error, 1)
-	go func() { _, err := a.Dial(context.Background(), plans[0]); done <- err }()
+	go func() { _, err := adapter.Dial(context.Background(), plans[0]); done <- err }()
 
 	select {
 	case err := <-done:

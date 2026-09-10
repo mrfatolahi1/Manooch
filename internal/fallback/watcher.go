@@ -17,7 +17,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/you/manooch/internal/core"
 	"github.com/you/manooch/internal/health"
-	"github.com/you/manooch/internal/obs"
+	"github.com/you/manooch/internal/observability"
 	"github.com/you/manooch/internal/publish"
 )
 
@@ -25,9 +25,9 @@ import (
 // TTL. deploy/redis.conf enables it with notify-keyspace-events Ex.
 const expiredEvent = "__keyevent@%d__:expired"
 
-// errLogInterval caps the error log rate. Redis being unreachable is one fact,
-// not one fact per sweep.
-const errLogInterval = 10 * time.Second
+// errorLogInterval caps the error log rate. Redis being unreachable is one
+// fact, not one fact per sweep.
+const errorLogInterval = 10 * time.Second
 
 // Options configures a Watcher.
 type Options struct {
@@ -44,15 +44,15 @@ type Options struct {
 	// Redis is read from, never written to: the expiry subscription and the
 	// sweep. All writes go through Publisher.
 	Redis *redis.Client
-	// DB is the Redis database the keyspace events come from.
-	DB int
+	// Database is the Redis database the keyspace events come from.
+	Database int
 
 	Health  *health.Tracker
-	Metrics *obs.Metrics
+	Metrics *observability.Metrics
 	Log     *slog.Logger
 
-	// Specs is every stream to watch.
-	Specs []core.StreamSpec
+	// Specifications is every stream to watch.
+	Specifications []core.StreamSpec
 
 	// MaxConcurrentPolls caps how many streams are on REST at once. Streams
 	// past the cap go STALE rather than queueing behind the ones ahead.
@@ -78,64 +78,64 @@ type Options struct {
 
 // A Watcher turns expired keys into REST polls.
 type Watcher struct {
-	opts Options
-	now  func() time.Time
+	options Options
+	now     func() time.Time
 
 	// keys and order are fixed after New: the stream set comes from config and
 	// does not change under a running process.
 	keys  map[string]core.StreamSpec
 	order []string
 
-	mu      sync.Mutex
+	mutex   sync.Mutex
 	active  map[core.StreamSpec]*poller
 	expired map[core.StreamSpec]bool
 	lastLog time.Time
 }
 
 // New builds a watcher. It subscribes to nothing until Run.
-func New(opts Options) (*Watcher, error) {
+func New(options Options) (*Watcher, error) {
 	switch {
-	case opts.Venue == "":
+	case options.Venue == "":
 		return nil, errors.New("fallback: no venue")
-	case opts.Adapter == nil:
+	case options.Adapter == nil:
 		return nil, errors.New("fallback: no adapter")
-	case opts.Publisher == nil:
+	case options.Publisher == nil:
 		return nil, errors.New("fallback: no publisher")
-	case opts.Redis == nil:
+	case options.Redis == nil:
 		return nil, errors.New("fallback: no redis client")
-	case opts.Health == nil:
+	case options.Health == nil:
 		return nil, errors.New("fallback: no health tracker")
-	case opts.Metrics == nil:
+	case options.Metrics == nil:
 		return nil, errors.New("fallback: no metrics")
-	case opts.Log == nil:
+	case options.Log == nil:
 		return nil, errors.New("fallback: no logger")
-	case opts.SweepInterval <= 0:
-		return nil, fmt.Errorf("fallback: sweep interval is %v", opts.SweepInterval)
-	case opts.PollInterval <= 0:
-		return nil, fmt.Errorf("fallback: poll interval is %v", opts.PollInterval)
-	case opts.MaxConcurrentPolls < 1:
-		return nil, fmt.Errorf("fallback: max concurrent polls is %d", opts.MaxConcurrentPolls)
+	case options.SweepInterval <= 0:
+		return nil, fmt.Errorf("fallback: sweep interval is %v", options.SweepInterval)
+	case options.PollInterval <= 0:
+		return nil, fmt.Errorf("fallback: poll interval is %v", options.PollInterval)
+	case options.MaxConcurrentPolls < 1:
+		return nil, fmt.Errorf("fallback: max concurrent polls is %d", options.MaxConcurrentPolls)
 	}
-	if opts.Now == nil {
-		opts.Now = time.Now
+	if options.Now == nil {
+		options.Now = time.Now
 	}
 
-	w := &Watcher{
-		opts:    opts,
-		now:     opts.Now,
-		keys:    make(map[string]core.StreamSpec, len(opts.Specs)),
+	watcher := &Watcher{
+		options: options,
+		now:     options.Now,
+		keys:    make(map[string]core.StreamSpec, len(options.Specifications)),
 		active:  map[core.StreamSpec]*poller{},
 		expired: map[core.StreamSpec]bool{},
 	}
-	for _, spec := range opts.Specs {
-		k := publish.Key(opts.Venue, spec.Instrument.MarketType, spec.Instrument.Canonical(), spec.Channel)
-		if _, dup := w.keys[k]; dup {
+	for _, specification := range options.Specifications {
+		k := publish.Key(options.Venue, specification.Instrument.MarketType, specification.Instrument.Canonical(), specification.Channel)
+		if _, duplicate := watcher.keys[k]; duplicate {
 			continue
 		}
-		w.keys[k] = spec
-		w.order = append(w.order, k)
+		watcher.keys[k] = specification
+		watcher.order = append(watcher.order, k)
 	}
-	return w, nil
+	return watcher, nil
 }
 
 // Run watches for expired keys until ctx ends.
@@ -145,33 +145,33 @@ func New(opts Options) (*Watcher, error) {
 // when the key is actually reclaimed, which is not the instant it expired. The
 // sweep is what makes a missed notification a five-second delay rather than a
 // stream that is never served.
-func (w *Watcher) Run(ctx context.Context) {
-	sub := w.opts.Redis.Subscribe(ctx, fmt.Sprintf(expiredEvent, w.opts.DB))
-	defer sub.Close()
-	events := sub.Channel()
+func (watcher *Watcher) Run(ctx context.Context) {
+	subscription := watcher.options.Redis.Subscribe(ctx, fmt.Sprintf(expiredEvent, watcher.options.Database))
+	defer subscription.Close()
+	events := subscription.Channel()
 
-	tick := time.NewTicker(w.opts.SweepInterval)
+	tick := time.NewTicker(watcher.options.SweepInterval)
 	defer tick.Stop()
 
-	w.opts.Log.Info("fallback watching",
-		"keys", len(w.order),
-		"sweep_interval", w.opts.SweepInterval.String(),
-		"poll_interval", w.opts.PollInterval.String(),
-		"max_concurrent", w.opts.MaxConcurrentPolls)
+	watcher.options.Log.Info("fallback watching",
+		"keys", len(watcher.order),
+		"sweep_interval", watcher.options.SweepInterval.String(),
+		"poll_interval", watcher.options.PollInterval.String(),
+		"max_concurrent", watcher.options.MaxConcurrentPolls)
 
 	for {
 		select {
 		case <-ctx.Done():
-			w.stop()
+			watcher.stop()
 			return
-		case m, ok := <-events:
+		case message, ok := <-events:
 			if !ok {
-				w.stop()
+				watcher.stop()
 				return
 			}
-			w.onExpired(ctx, m.Payload)
+			watcher.onExpired(ctx, message.Payload)
 		case <-tick.C:
-			w.sweep(ctx)
+			watcher.sweep(ctx)
 		}
 	}
 }
@@ -181,76 +181,76 @@ func (w *Watcher) Run(ctx context.Context) {
 // One round trip, never one call per key: a per-key poll over two hundred
 // instruments is six hundred round trips every sweep interval, which is a load
 // pattern that makes the outage worse at exactly the wrong moment.
-func (w *Watcher) sweep(ctx context.Context) {
-	pipe := w.opts.Redis.Pipeline()
-	cmds := make([]*redis.IntCmd, len(w.order))
-	for i, k := range w.order {
-		cmds[i] = pipe.Exists(ctx, k)
+func (watcher *Watcher) sweep(ctx context.Context) {
+	pipe := watcher.options.Redis.Pipeline()
+	commands := make([]*redis.IntCmd, len(watcher.order))
+	for i, k := range watcher.order {
+		commands[i] = pipe.Exists(ctx, k)
 	}
 	if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
 		if ctx.Err() == nil {
-			w.logError("sweep failed", err)
+			watcher.logError("sweep failed", err)
 		}
 		return
 	}
 
-	for i, cmd := range cmds {
-		if n, err := cmd.Result(); err == nil && n == 0 {
-			w.onExpired(ctx, w.order[i])
+	for i, command := range commands {
+		if n, err := command.Result(); err == nil && n == 0 {
+			watcher.onExpired(ctx, watcher.order[i])
 		}
 	}
 }
 
 // onExpired reacts to one key that is gone.
-func (w *Watcher) onExpired(ctx context.Context, key string) {
-	if spec, ok := w.keys[key]; ok {
-		w.Expired(ctx, spec)
+func (watcher *Watcher) onExpired(ctx context.Context, key string) {
+	if specification, ok := watcher.keys[key]; ok {
+		watcher.Expired(ctx, specification)
 	}
 	// Anything else is another venue's key, or not ours at all.
 }
 
 // Expired reacts to a stream whose key is known to have gone: it reports the
 // expiry once and starts serving the stream over REST.
-func (w *Watcher) Expired(ctx context.Context, spec core.StreamSpec) {
+func (watcher *Watcher) Expired(ctx context.Context, specification core.StreamSpec) {
 	// Reported once per outage, not once per sweep: the sweep re-finds a key
 	// that is still missing every interval, and counting each of those as a
 	// fresh expiry would turn one dead stream into a restart every five
 	// seconds and a metric nobody can read.
-	if w.markExpired(spec) {
-		w.opts.Health.KeyExpired(spec)
-		w.opts.Log.Warn("key expired", "stream", spec.String())
-		if w.opts.OnExpired != nil {
-			w.opts.OnExpired(spec)
+	if watcher.markExpired(specification) {
+		watcher.options.Health.KeyExpired(specification)
+		watcher.options.Log.Warn("key expired", "stream", specification.String())
+		if watcher.options.OnExpired != nil {
+			watcher.options.OnExpired(specification)
 		}
 	}
 	// Retried on every sweep, not only on the first sighting: a stream turned
 	// away by the concurrency cap has to get another chance when one frees up.
-	w.engage(ctx, spec)
+	watcher.engage(ctx, specification)
 }
 
 // markExpired records a stream as expired, reporting whether that is new.
-func (w *Watcher) markExpired(spec core.StreamSpec) bool {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.expired[spec] {
+func (watcher *Watcher) markExpired(specification core.StreamSpec) bool {
+	watcher.mutex.Lock()
+	defer watcher.mutex.Unlock()
+	if watcher.expired[specification] {
 		return false
 	}
-	w.expired[spec] = true
+	watcher.expired[specification] = true
 	return true
 }
 
 // logError rate-limits a repeated failure to one line per interval.
-func (w *Watcher) logError(msg string, err error) {
-	now := w.now()
+func (watcher *Watcher) logError(message string, err error) {
+	now := watcher.now()
 
-	w.mu.Lock()
-	log := now.Sub(w.lastLog) >= errLogInterval
+	watcher.mutex.Lock()
+	log := now.Sub(watcher.lastLog) >= errorLogInterval
 	if log {
-		w.lastLog = now
+		watcher.lastLog = now
 	}
-	w.mu.Unlock()
+	watcher.mutex.Unlock()
 
 	if log {
-		w.opts.Log.Error(msg, "error", err.Error())
+		watcher.options.Log.Error(message, "error", err.Error())
 	}
 }

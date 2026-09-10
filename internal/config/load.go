@@ -29,46 +29,46 @@ const (
 
 var symbolRe = regexp.MustCompile(core.CanonicalPattern)
 
-// Load reads dir/defaults.yaml, overlays dir/venues/<venue>.yaml and returns the
-// result only if every validation rule passes. Merging is per key: the venue
-// file overrides the keys it sets and leaves the rest alone.
+// Load reads dir/defaults.yaml, overlays dir/venues/<venue>.yaml and returns
+// the result only if every validation rule passes. Merging is per key: the
+// venue file overrides the keys it sets and leaves the rest alone.
 func Load(dir string, venue string) (*Config, error) {
 	defaultsPath := filepath.Join(dir, DefaultsFile)
 	venuePath := filepath.Join(dir, VenuesDir, strings.ToLower(venue)+".yaml")
 
-	cfg := &Config{}
-	if err := decodeStrict(defaultsPath, cfg); err != nil {
+	configuration := &Config{}
+	if err := decodeStrict(defaultsPath, configuration); err != nil {
 		return nil, err
 	}
-	if err := decodeStrict(venuePath, cfg); err != nil {
+	if err := decodeStrict(venuePath, configuration); err != nil {
 		return nil, err
 	}
 
-	prov, err := newProvenance(defaultsPath, venuePath)
+	provenance, err := newProvenance(defaultsPath, venuePath)
 	if err != nil {
 		return nil, err
 	}
 
-	if want := strings.ToUpper(venue); cfg.Venue != want {
-		return nil, prov.errf("venue", "is %q but %s was requested", cfg.Venue, want)
+	if want := strings.ToUpper(venue); configuration.Venue != want {
+		return nil, provenance.newError("venue", "is %q but %s was requested", configuration.Venue, want)
 	}
-	if err := cfg.validate(prov); err != nil {
+	if err := configuration.validate(provenance); err != nil {
 		return nil, err
 	}
-	return cfg, nil
+	return configuration, nil
 }
 
 // decodeStrict decodes one YAML file onto out, rejecting unknown keys.
 func decodeStrict(path string, out any) error {
-	f, err := os.Open(path)
+	file, err := os.Open(path)
 	if err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
-	defer f.Close()
+	defer file.Close()
 
-	dec := yaml.NewDecoder(f)
-	dec.KnownFields(true)
-	if err := dec.Decode(out); err != nil {
+	decoder := yaml.NewDecoder(file)
+	decoder.KnownFields(true)
+	if err := decoder.Decode(out); err != nil {
 		if errors.Is(err, io.EOF) {
 			return fmt.Errorf("%s: file is empty", path)
 		}
@@ -87,7 +87,7 @@ type provenance struct {
 }
 
 func newProvenance(defaultsPath, venuePath string) (*provenance, error) {
-	p := &provenance{files: map[string]string{}, defaultsPath: defaultsPath}
+	provenance := &provenance{files: map[string]string{}, defaultsPath: defaultsPath}
 	// Defaults first, venue second: the venue file wins where both set a key.
 	for _, path := range []string{defaultsPath, venuePath} {
 		var raw map[string]any
@@ -98,112 +98,112 @@ func newProvenance(defaultsPath, venuePath string) (*provenance, error) {
 		if err := yaml.Unmarshal(b, &raw); err != nil {
 			return nil, fmt.Errorf("%s: %w", path, err)
 		}
-		flatten("", raw, path, p.files)
+		flatten("", raw, path, provenance.files)
 	}
-	return p, nil
+	return provenance, nil
 }
 
 func flatten(prefix string, v any, file string, out map[string]string) {
 	switch t := v.(type) {
 	case map[string]any:
-		for k, val := range t {
+		for k, value := range t {
 			key := k
 			if prefix != "" {
 				key = prefix + "." + k
 			}
 			out[key] = file
-			flatten(key, val, file, out)
+			flatten(key, value, file, out)
 		}
 	case []any:
-		for i, val := range t {
+		for i, value := range t {
 			key := fmt.Sprintf("%s[%d]", prefix, i)
 			out[key] = file
-			flatten(key, val, file, out)
+			flatten(key, value, file, out)
 		}
 	}
 }
 
 // file returns the file responsible for a key path, walking up to the nearest
 // ancestor that was set when the key itself is absent.
-func (p *provenance) file(path string) string {
-	for cur := path; cur != ""; {
-		if f, ok := p.files[cur]; ok {
+func (provenance *provenance) file(path string) string {
+	for current := path; current != ""; {
+		if f, ok := provenance.files[current]; ok {
 			return f
 		}
-		i := strings.LastIndexAny(cur, ".[")
+		i := strings.LastIndexAny(current, ".[")
 		if i <= 0 {
 			break
 		}
-		cur = cur[:i]
+		current = current[:i]
 	}
-	return p.defaultsPath
+	return provenance.defaultsPath
 }
 
-// errf builds an error naming both the offending key and its file.
-func (p *provenance) errf(path, format string, args ...any) error {
-	return fmt.Errorf("%s: %s: %s", p.file(path), path, fmt.Sprintf(format, args...))
+// newError builds an error naming both the offending key and its file.
+func (provenance *provenance) newError(path, format string, arguments ...any) error {
+	return fmt.Errorf("%s: %s: %s", provenance.file(path), path, fmt.Sprintf(format, arguments...))
 }
 
 // ---------- validation ----------
 
-func (c *Config) validate(p *provenance) error {
-	var errs []error
+func (configuration *Config) validate(provenance *provenance) error {
+	var failures []error
 
 	v := validator.New()
 	v.RegisterTagNameFunc(yamlTagName)
-	if err := v.Struct(c); err != nil {
-		var ve validator.ValidationErrors
-		if !errors.As(err, &ve) {
+	if err := v.Struct(configuration); err != nil {
+		var validationErrors validator.ValidationErrors
+		if !errors.As(err, &validationErrors) {
 			return fmt.Errorf("config: %w", err)
 		}
-		for _, fe := range ve {
-			path := strings.TrimPrefix(fe.Namespace(), "Config.")
-			errs = append(errs, p.errf(path, "%s", describe(fe)))
+		for _, fieldError := range validationErrors {
+			path := strings.TrimPrefix(fieldError.Namespace(), "Config.")
+			failures = append(failures, provenance.newError(path, "%s", describe(fieldError)))
 		}
 	}
 
-	errs = append(errs, c.validateScales(p)...)
-	errs = append(errs, c.validateHTTP(p)...)
-	errs = append(errs, c.validateHealth(p)...)
-	errs = append(errs, c.validateEndpoints(p)...)
-	errs = append(errs, c.validateRateLimit(p)...)
-	errs = append(errs, c.validateCadence(p)...)
-	errs = append(errs, c.validateSymbolOverrides(p)...)
-	errs = append(errs, c.resolveInstruments(p)...)
+	failures = append(failures, configuration.validateScales(provenance)...)
+	failures = append(failures, configuration.validateHTTP(provenance)...)
+	failures = append(failures, configuration.validateHealth(provenance)...)
+	failures = append(failures, configuration.validateEndpoints(provenance)...)
+	failures = append(failures, configuration.validateRateLimit(provenance)...)
+	failures = append(failures, configuration.validateCadence(provenance)...)
+	failures = append(failures, configuration.validateSymbolOverrides(provenance)...)
+	failures = append(failures, configuration.resolveInstruments(provenance)...)
 
-	return errors.Join(errs...)
+	return errors.Join(failures...)
 }
 
 // validateScales rejects scales that disagree with pkg/price; a mismatch puts
 // every number off by a power of ten.
-func (c *Config) validateScales(p *provenance) []error {
-	var errs []error
+func (configuration *Config) validateScales(provenance *provenance) []error {
+	var failures []error
 	for _, s := range []struct {
 		key  string
 		got  int
 		want int
 	}{
-		{"scales.price_exp", c.Scales.PriceExp, price.PriceExp},
-		{"scales.size_exp", c.Scales.SizeExp, price.SizeExp},
-		{"scales.rate_exp", c.Scales.RateExp, price.RateExp},
+		{"scales.price_exp", configuration.Scales.PriceExp, price.PriceExp},
+		{"scales.size_exp", configuration.Scales.SizeExp, price.SizeExp},
+		{"scales.rate_exp", configuration.Scales.RateExp, price.RateExp},
 	} {
 		if s.got != s.want {
-			errs = append(errs, p.errf(s.key, "is %d but pkg/price is compiled for %d", s.got, s.want))
+			failures = append(failures, provenance.newError(s.key, "is %d but pkg/price is compiled for %d", s.got, s.want))
 		}
 	}
-	return errs
+	return failures
 }
 
 // validateHTTP keeps the admin surface on loopback: /metrics leaks which books
 // we watch and /debug/pprof hands out a heap dump to anyone who asks.
-func (c *Config) validateHTTP(p *provenance) []error {
+func (configuration *Config) validateHTTP(provenance *provenance) []error {
 	const key = "service.http.listen"
-	if !c.Service.HTTP.Enabled {
+	if !configuration.Service.HTTP.Enabled {
 		return nil
 	}
-	host, _, err := net.SplitHostPort(c.Service.HTTP.Listen)
+	host, _, err := net.SplitHostPort(configuration.Service.HTTP.Listen)
 	if err != nil {
-		return []error{p.errf(key, "must be host:port, got %q", c.Service.HTTP.Listen)}
+		return []error{provenance.newError(key, "must be host:port, got %q", configuration.Service.HTTP.Listen)}
 	}
 	if host == "localhost" {
 		return nil
@@ -211,14 +211,14 @@ func (c *Config) validateHTTP(p *provenance) []error {
 	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
 		return nil
 	}
-	return []error{p.errf(key, "must bind to a loopback address, got %q; /metrics and /debug/pprof must not be reachable off-host", c.Service.HTTP.Listen)}
+	return []error{provenance.newError(key, "must bind to a loopback address, got %q; /metrics and /debug/pprof must not be reachable off-host", configuration.Service.HTTP.Listen)}
 }
 
-func (c *Config) validateHealth(p *provenance) []error {
-	if c.Health.ClockSkewStaleMS <= c.Health.ClockSkewDegradedMS {
-		return []error{p.errf("health.clock_skew_stale_ms",
+func (configuration *Config) validateHealth(provenance *provenance) []error {
+	if configuration.Health.ClockSkewStaleMS <= configuration.Health.ClockSkewDegradedMS {
+		return []error{provenance.newError("health.clock_skew_stale_ms",
 			"is %d but must be greater than health.clock_skew_degraded_ms (%d)",
-			c.Health.ClockSkewStaleMS, c.Health.ClockSkewDegradedMS)}
+			configuration.Health.ClockSkewStaleMS, configuration.Health.ClockSkewDegradedMS)}
 	}
 	return nil
 }
@@ -227,32 +227,32 @@ func (c *Config) validateHealth(p *provenance) []error {
 // from them. A socket carrying more streams than the venue accepts on one
 // connection is refused at subscribe time, which looks like a venue outage
 // rather than a config error.
-func (c *Config) validateRateLimit(p *provenance) []error {
-	if c.Connection.MaxStreamsPerSocket > c.RateLimit.SubscriptionsPerConnection {
-		return []error{p.errf("connection.max_streams_per_socket",
+func (configuration *Config) validateRateLimit(provenance *provenance) []error {
+	if configuration.Connection.MaxStreamsPerSocket > configuration.RateLimit.SubscriptionsPerConnection {
+		return []error{provenance.newError("connection.max_streams_per_socket",
 			"is %d but rate_limit.subscriptions_per_connection is %d; the venue would refuse the extra subscriptions",
-			c.Connection.MaxStreamsPerSocket, c.RateLimit.SubscriptionsPerConnection)}
+			configuration.Connection.MaxStreamsPerSocket, configuration.RateLimit.SubscriptionsPerConnection)}
 	}
 	return nil
 }
 
-func (c *Config) validateEndpoints(p *provenance) []error {
-	var errs []error
+func (configuration *Config) validateEndpoints(provenance *provenance) []error {
+	var failures []error
 	check := func(kind string, m map[string]string, schemes ...string) {
 		// Sorted so several broken endpoints report in a stable order.
 		for _, name := range slices.Sorted(maps.Keys(m)) {
 			raw := m[name]
 			key := "endpoints." + kind + "." + name
 			if _, err := core.ParseMarketType(name); err != nil {
-				errs = append(errs, p.errf(key, "%v", err))
+				failures = append(failures, provenance.newError(key, "%v", err))
 			}
-			u, err := url.Parse(raw)
-			if err != nil || u.Host == "" {
-				errs = append(errs, p.errf(key, "is not a URL: %q", raw))
+			parsed, err := url.Parse(raw)
+			if err != nil || parsed.Host == "" {
+				failures = append(failures, provenance.newError(key, "is not a URL: %q", raw))
 				continue
 			}
-			if !slices.Contains(schemes, u.Scheme) {
-				errs = append(errs, p.errf(key, "scheme %q must be one of %s", u.Scheme, strings.Join(schemes, ", ")))
+			if !slices.Contains(schemes, parsed.Scheme) {
+				failures = append(failures, provenance.newError(key, "scheme %q must be one of %s", parsed.Scheme, strings.Join(schemes, ", ")))
 			}
 		}
 	}
@@ -261,148 +261,148 @@ func (c *Config) validateEndpoints(p *provenance) []error {
 	// public REST call, so what belongs here is where to ask rather than where
 	// to connect. Rejecting https would have forced that URL into a key the
 	// adapter does not read, which is a config file that lies.
-	check("ws", c.Endpoints.WS, "ws", "wss", "http", "https")
-	check("rest", c.Endpoints.REST, "http", "https")
-	return errs
+	check("ws", configuration.Endpoints.WebSocket, "ws", "wss", "http", "https")
+	check("rest", configuration.Endpoints.REST, "http", "https")
+	return failures
 }
 
 // validateCadence checks every quirks.cadence key names a real channel and
 // carries a positive duration. The cadence is what a stream's key TTL is
 // derived from, so a missing or zero one publishes a key that expires
 // immediately and reports a healthy stream as dead.
-func (c *Config) validateCadence(p *provenance) []error {
-	var errs []error
+func (configuration *Config) validateCadence(provenance *provenance) []error {
+	var failures []error
 	// Sorted so several broken entries report in a stable order.
-	for _, name := range slices.Sorted(maps.Keys(c.Quirks.Cadence)) {
+	for _, name := range slices.Sorted(maps.Keys(configuration.Quirks.Cadence)) {
 		key := "quirks.cadence." + name
-		ch, err := core.ParseChannel(name)
+		channel, err := core.ParseChannel(name)
 		if err != nil {
-			errs = append(errs, p.errf(key, "%v", err))
+			failures = append(failures, provenance.newError(key, "%v", err))
 			continue
 		}
-		if core.ChannelName(ch) != name {
-			errs = append(errs, p.errf(key, "channel %q must be lower snake case", name))
+		if core.ChannelName(channel) != name {
+			failures = append(failures, provenance.newError(key, "channel %q must be lower snake case", name))
 		}
-		if c.Quirks.Cadence[name] <= 0 {
-			errs = append(errs, p.errf(key, "must be greater than 0, got %s", c.Quirks.Cadence[name]))
+		if configuration.Quirks.Cadence[name] <= 0 {
+			failures = append(failures, provenance.newError(key, "must be greater than 0, got %s", configuration.Quirks.Cadence[name]))
 		}
 	}
-	return errs
+	return failures
 }
 
-func (c *Config) validateSymbolOverrides(p *provenance) []error {
-	var errs []error
-	for _, canonical := range slices.Sorted(maps.Keys(c.SymbolOverrides)) {
-		venueSymbol := c.SymbolOverrides[canonical]
+func (configuration *Config) validateSymbolOverrides(provenance *provenance) []error {
+	var failures []error
+	for _, canonical := range slices.Sorted(maps.Keys(configuration.SymbolOverrides)) {
+		venueSymbol := configuration.SymbolOverrides[canonical]
 		key := "symbol_overrides." + canonical
 		if !symbolRe.MatchString(canonical) {
-			errs = append(errs, p.errf(key, "key must match %s", core.CanonicalPattern))
+			failures = append(failures, provenance.newError(key, "key must match %s", core.CanonicalPattern))
 		}
 		if venueSymbol == "" {
-			errs = append(errs, p.errf(key, "venue symbol must not be empty"))
+			failures = append(failures, provenance.newError(key, "venue symbol must not be empty"))
 		}
 	}
-	return errs
+	return failures
 }
 
 // resolveInstruments checks every instrument block and fills in the parsed
 // enums. It runs last, so those fields are only populated on a config that
 // passed.
-func (c *Config) resolveInstruments(p *provenance) []error {
-	var errs []error
+func (configuration *Config) resolveInstruments(provenance *provenance) []error {
+	var failures []error
 	seenMarket := map[string]int{}
 
-	for i := range c.Instruments {
-		in := &c.Instruments[i]
+	for i := range configuration.Instruments {
+		in := &configuration.Instruments[i]
 		base := fmt.Sprintf("instruments[%d]", i)
 
-		if prev, dup := seenMarket[in.MarketType]; dup {
-			errs = append(errs, p.errf(base+".market_type",
+		if prev, duplicate := seenMarket[in.MarketType]; duplicate {
+			failures = append(failures, provenance.newError(base+".market_type",
 				"market_type %q is already configured by instruments[%d]", in.MarketType, prev))
 		}
 		seenMarket[in.MarketType] = i
 
-		mt, err := core.ParseMarketType(in.MarketType)
+		marketType, err := core.ParseMarketType(in.MarketType)
 		if err != nil {
-			errs = append(errs, p.errf(base+".market_type", "%v", err))
+			failures = append(failures, provenance.newError(base+".market_type", "%v", err))
 			continue // everything below needs a market type
 		}
-		in.MT = mt
+		in.ResolvedMarketType = marketType
 
-		if _, ok := c.Endpoints.WS[in.MarketType]; !ok {
-			errs = append(errs, p.errf("endpoints.ws", "has no entry for market_type %q used by %s", in.MarketType, base))
+		if _, ok := configuration.Endpoints.WebSocket[in.MarketType]; !ok {
+			failures = append(failures, provenance.newError("endpoints.ws", "has no entry for market_type %q used by %s", in.MarketType, base))
 		}
 
-		in.Chans = in.Chans[:0]
+		in.ResolvedChannels = in.ResolvedChannels[:0]
 		for j, name := range in.Channels {
 			key := fmt.Sprintf("%s.channels[%d]", base, j)
-			ch, err := core.ParseChannel(name)
+			channel, err := core.ParseChannel(name)
 			if err != nil {
-				errs = append(errs, p.errf(key, "%v", err))
+				failures = append(failures, provenance.newError(key, "%v", err))
 				continue
 			}
-			if !core.ChannelValidFor(ch, mt) {
-				errs = append(errs, p.errf(key, "channel %q does not exist on market_type %s", name, in.MarketType))
+			if !core.ChannelValidFor(channel, marketType) {
+				failures = append(failures, provenance.newError(key, "channel %q does not exist on market_type %s", name, in.MarketType))
 				continue
 			}
-			if slices.Contains(in.Chans, ch) {
-				errs = append(errs, p.errf(key, "channel %q is listed twice", name))
+			if slices.Contains(in.ResolvedChannels, channel) {
+				failures = append(failures, provenance.newError(key, "channel %q is listed twice", name))
 				continue
 			}
 			// Without a cadence there is no TTL, and a key with no TTL cannot
 			// say whether it is fresh.
-			if _, ok := c.Quirks.Cadence[name]; !ok {
-				errs = append(errs, p.errf("quirks.cadence",
+			if _, ok := configuration.Quirks.Cadence[name]; !ok {
+				failures = append(failures, provenance.newError("quirks.cadence",
 					"has no entry for channel %q used by %s", name, base))
 			}
-			in.Chans = append(in.Chans, ch)
+			in.ResolvedChannels = append(in.ResolvedChannels, channel)
 		}
 
-		for j, sym := range in.Symbols {
+		for j, symbol := range in.Symbols {
 			key := fmt.Sprintf("%s.symbols[%d]", base, j)
-			if !symbolRe.MatchString(sym) {
-				errs = append(errs, p.errf(key, "symbol %q must match %s", sym, core.CanonicalPattern))
+			if !symbolRe.MatchString(symbol) {
+				failures = append(failures, provenance.newError(key, "symbol %q must match %s", symbol, core.CanonicalPattern))
 				continue
 			}
-			if slices.Index(in.Symbols, sym) != j {
-				errs = append(errs, p.errf(key, "symbol %q is listed twice", sym))
+			if slices.Index(in.Symbols, symbol) != j {
+				failures = append(failures, provenance.newError(key, "symbol %q is listed twice", symbol))
 			}
 		}
 	}
-	return errs
+	return failures
 }
 
 // yamlTagName makes validator report the YAML key an operator wrote rather than
 // the Go field name they have never seen.
-func yamlTagName(f reflect.StructField) string {
-	name, _, _ := strings.Cut(f.Tag.Get("yaml"), ",")
+func yamlTagName(field reflect.StructField) string {
+	name, _, _ := strings.Cut(field.Tag.Get("yaml"), ",")
 	if name == "" || name == "-" {
-		return f.Name
+		return field.Name
 	}
 	return name
 }
 
-func describe(fe validator.FieldError) string {
-	switch fe.Tag() {
+func describe(fieldError validator.FieldError) string {
+	switch fieldError.Tag() {
 	case "required":
 		return "is required"
 	case "oneof":
-		return "must be one of: " + strings.ReplaceAll(fe.Param(), " ", ", ")
+		return "must be one of: " + strings.ReplaceAll(fieldError.Param(), " ", ", ")
 	case "eq":
-		return fmt.Sprintf("must be %q, got %v", fe.Param(), fe.Value())
+		return fmt.Sprintf("must be %q, got %v", fieldError.Param(), fieldError.Value())
 	case "gt":
-		return fmt.Sprintf("must be greater than %s, got %v", fe.Param(), fe.Value())
+		return fmt.Sprintf("must be greater than %s, got %v", fieldError.Param(), fieldError.Value())
 	case "gte":
-		return fmt.Sprintf("must be at least %s, got %v", fe.Param(), fe.Value())
+		return fmt.Sprintf("must be at least %s, got %v", fieldError.Param(), fieldError.Value())
 	case "lte":
-		return fmt.Sprintf("must be at most %s, got %v", fe.Param(), fe.Value())
+		return fmt.Sprintf("must be at most %s, got %v", fieldError.Param(), fieldError.Value())
 	case "min":
-		return fmt.Sprintf("must have at least %s entries", fe.Param())
+		return fmt.Sprintf("must have at least %s entries", fieldError.Param())
 	case "hostname_port":
-		return fmt.Sprintf("must be host:port, got %v", fe.Value())
+		return fmt.Sprintf("must be host:port, got %v", fieldError.Value())
 	case "uppercase":
-		return fmt.Sprintf("must be upper case, got %v", fe.Value())
+		return fmt.Sprintf("must be upper case, got %v", fieldError.Value())
 	default:
-		return fmt.Sprintf("fails rule %q (got %v)", fe.Tag(), fe.Value())
+		return fmt.Sprintf("fails rule %q (got %v)", fieldError.Tag(), fieldError.Value())
 	}
 }

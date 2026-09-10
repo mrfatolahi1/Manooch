@@ -5,7 +5,7 @@ Fixed-point `int64` types for every price, size and rate. Under `pkg/` because c
 | File | Holds |
 |---|---|
 | `price.go` | Types, scale constants, errors, parser, formatting, comparison |
-| `price_test.go` | Table tests per type, round-trips, `Cmp`, `FuzzParsePrice` |
+| `price_test.go` | Table tests per type, round-trips, `Compare`, `FuzzParsePrice` |
 
 | Scale | Exp | 1.0 is | Range |
 |---|---|---|---|
@@ -13,7 +13,7 @@ Fixed-point `int64` types for every price, size and rate. Under `pkg/` because c
 | `Size` | `-8` | `100_000_000` | `0.00000001` .. `92233720368.54775807` |
 | `Rate` | `-12` | `1_000_000_000_000` | `±9223372.036854775807` |
 
-`ParsePrice` / `ParseSize` / `ParseRate` in, `String` / `Float` / `Cmp` out. `Price` and `Size` reject negatives; `Rate` allows them. Errors: `ErrEmpty`, `ErrSyntax`, `ErrNotFinite`, `ErrNegative`, `ErrOutOfRange`, `ErrPrecisionLoss` — compare with `errors.Is`. Full API: `go doc ./pkg/price`.
+`ParsePrice` / `ParseSize` / `ParseRate` in, `String` / `Float` / `Compare` out. `Price` and `Size` reject negatives; `Rate` allows them. Errors: `ErrEmpty`, `ErrSyntax`, `ErrNotFinite`, `ErrNegative`, `ErrOutOfRange`, `ErrPrecisionLoss` — compare with `errors.Is`. Full API: `go doc ./pkg/price`.
 
 ## How parsing works
 

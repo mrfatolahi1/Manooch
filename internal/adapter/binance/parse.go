@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	pb "github.com/you/manooch/gen/manoochv1"
+	"github.com/you/manooch/gen/manoochv1"
 	"github.com/you/manooch/internal/core"
 	"github.com/you/manooch/internal/publish"
 	"github.com/you/manooch/pkg/price"
@@ -29,8 +29,8 @@ type frame struct {
 }
 
 type venueError struct {
-	Code int64  `json:"code"`
-	Msg  string `json:"msg"`
+	Code    int64  `json:"code"`
+	Message string `json:"msg"`
 }
 
 // markPriceUpdate is the payload documented at
@@ -53,75 +53,75 @@ type markPriceUpdate struct {
 
 // Parse converts one frame into zero or more messages.
 //
-// It is pure: given the same bytes and the same recvNs it returns the same
+// It is pure: given the same bytes and the same receivedNs it returns the same
 // messages, every time, with no clock read and no map iteration. That is what
 // makes fixture replay a real test rather than an approximation, and it is why
 // publish_time_ns is stamped by the publisher and not here.
 //
 // A frame that is not data returns (nil, nil): acks and heartbeats are normal
 // traffic, not failures.
-func (a *Adapter) Parse(raw []byte, recvNs int64) ([]core.Message, error) {
-	var f frame
-	if err := json.Unmarshal(raw, &f); err != nil {
-		return nil, core.NewParseError(core.KindJSON, pb.Channel_CHANNEL_UNSPECIFIED, "", err, "frame is not json")
+func (adapter *Adapter) Parse(raw []byte, receivedNs int64) ([]core.Message, error) {
+	var frame frame
+	if err := json.Unmarshal(raw, &frame); err != nil {
+		return nil, core.NewParseError(core.KindJSON, manoochv1.Channel_CHANNEL_UNSPECIFIED, "", err, "frame is not json")
 	}
 
-	if f.Error != nil {
-		return nil, core.NewParseError(core.KindVenue, pb.Channel_CHANNEL_UNSPECIFIED, "", nil,
-			"venue error %d: %s", f.Error.Code, f.Error.Msg)
+	if frame.Error != nil {
+		return nil, core.NewParseError(core.KindVenue, manoochv1.Channel_CHANNEL_UNSPECIFIED, "", nil,
+			"venue error %d: %s", frame.Error.Code, frame.Error.Message)
 	}
 
 	// A subscription acknowledgement carries an id and no data.
-	body := f.Data
+	body := frame.Data
 	if len(body) == 0 {
-		if f.ID != nil {
+		if frame.ID != nil {
 			return nil, nil
 		}
 		body = raw // the single-symbol endpoint sends the payload unwrapped
 	}
 
-	var u markPriceUpdate
-	if err := json.Unmarshal(body, &u); err != nil {
-		return nil, core.NewParseError(core.KindJSON, pb.Channel_CHANNEL_UNSPECIFIED, "", err, "payload is not json")
+	var update markPriceUpdate
+	if err := json.Unmarshal(body, &update); err != nil {
+		return nil, core.NewParseError(core.KindJSON, manoochv1.Channel_CHANNEL_UNSPECIFIED, "", err, "payload is not json")
 	}
-	if u.Event == "" && u.Symbol == "" {
+	if update.Event == "" && update.Symbol == "" {
 		return nil, nil // a pong or another control frame with no payload
 	}
-	if u.Event != eventMarkPriceUpdate {
-		return nil, core.NewParseError(core.KindField, pb.Channel_CHANNEL_UNSPECIFIED, u.Symbol, nil,
-			"unhandled event type %q", u.Event)
+	if update.Event != eventMarkPriceUpdate {
+		return nil, core.NewParseError(core.KindField, manoochv1.Channel_CHANNEL_UNSPECIFIED, update.Symbol, nil,
+			"unhandled event type %q", update.Event)
 	}
 
-	ref, err := a.ParseVenueSymbol(u.Symbol, MarketType)
+	reference, err := adapter.ParseVenueSymbol(update.Symbol, MarketType)
 	if err != nil {
-		return nil, core.NewParseError(core.KindField, pb.Channel_CHANNEL_UNSPECIFIED, u.Symbol, err, "symbol")
+		return nil, core.NewParseError(core.KindField, manoochv1.Channel_CHANNEL_UNSPECIFIED, update.Symbol, err, "symbol")
 	}
-	if u.EventTimeMS <= 0 {
-		return nil, core.NewParseError(core.KindField, pb.Channel_CHANNEL_UNSPECIFIED, u.Symbol, nil,
-			"event time is %d", u.EventTimeMS)
+	if update.EventTimeMS <= 0 {
+		return nil, core.NewParseError(core.KindField, manoochv1.Channel_CHANNEL_UNSPECIFIED, update.Symbol, nil,
+			"event time is %d", update.EventTimeMS)
 	}
-	exchangeNs := msToNs(u.EventTimeMS)
+	exchangeNs := millisecondsToNanoseconds(update.EventTimeMS)
 
 	// The instrument is built once and shared: the three messages describe the
 	// same instrument at the same instant, and the publisher only reads it.
-	instrument := ref.Proto(strings.ToUpper(u.Symbol))
+	instrument := reference.Proto(strings.ToUpper(update.Symbol))
 
-	mark, err := price.ParsePrice(u.MarkPrice)
+	mark, err := price.ParsePrice(update.MarkPrice)
 	if err != nil {
-		return nil, numericError(pb.Channel_CHANNEL_MARK_PRICE, u.Symbol, "p", u.MarkPrice, err)
+		return nil, numericError(manoochv1.Channel_CHANNEL_MARK_PRICE, update.Symbol, "p", update.MarkPrice, err)
 	}
-	index, err := price.ParsePrice(u.IndexPrice)
+	index, err := price.ParsePrice(update.IndexPrice)
 	if err != nil {
-		return nil, numericError(pb.Channel_CHANNEL_INDEX_PRICE, u.Symbol, "i", u.IndexPrice, err)
+		return nil, numericError(manoochv1.Channel_CHANNEL_INDEX_PRICE, update.Symbol, "i", update.IndexPrice, err)
 	}
 
-	msgs := make([]core.Message, 0, len(Channels))
-	msgs = append(msgs,
-		a.message(ref, instrument, pb.Channel_CHANNEL_MARK_PRICE, exchangeNs, recvNs, func(env *pb.Envelope) proto.Message {
-			return &pb.MarkPrice{Env: env, MarkPrice: int64(mark)}
+	messages := make([]core.Message, 0, len(Channels))
+	messages = append(messages,
+		adapter.message(reference, instrument, manoochv1.Channel_CHANNEL_MARK_PRICE, exchangeNs, receivedNs, func(envelope *manoochv1.Envelope) proto.Message {
+			return &manoochv1.MarkPrice{Env: envelope, MarkPrice: int64(mark)}
 		}),
-		a.message(ref, instrument, pb.Channel_CHANNEL_INDEX_PRICE, exchangeNs, recvNs, func(env *pb.Envelope) proto.Message {
-			return &pb.IndexPrice{Env: env, IndexPrice: int64(index)}
+		adapter.message(reference, instrument, manoochv1.Channel_CHANNEL_INDEX_PRICE, exchangeNs, receivedNs, func(envelope *manoochv1.Envelope) proto.Message {
+			return &manoochv1.IndexPrice{Env: envelope, IndexPrice: int64(index)}
 		}),
 	)
 
@@ -129,18 +129,18 @@ func (a *Adapter) Parse(raw []byte, recvNs int64) ([]core.Message, error) {
 	// funding time. We only subscribe to perpetuals, so this should not
 	// happen — but zero is a real funding rate and empty is missing data, so
 	// the message is skipped rather than published as a rate of zero.
-	if u.FundingRate == "" || u.NextFundingMS <= 0 {
-		return msgs, nil
+	if update.FundingRate == "" || update.NextFundingMS <= 0 {
+		return messages, nil
 	}
-	rate, err := price.ParseRate(u.FundingRate)
+	rate, err := price.ParseRate(update.FundingRate)
 	if err != nil {
-		return nil, numericError(pb.Channel_CHANNEL_FUNDING, u.Symbol, "r", u.FundingRate, err)
+		return nil, numericError(manoochv1.Channel_CHANNEL_FUNDING, update.Symbol, "r", update.FundingRate, err)
 	}
-	nextNs := msToNs(u.NextFundingMS)
-	msgs = append(msgs,
-		a.message(ref, instrument, pb.Channel_CHANNEL_FUNDING, exchangeNs, recvNs, func(env *pb.Envelope) proto.Message {
-			return &pb.Funding{
-				Env:               env,
+	nextNs := millisecondsToNanoseconds(update.NextFundingMS)
+	messages = append(messages,
+		adapter.message(reference, instrument, manoochv1.Channel_CHANNEL_FUNDING, exchangeNs, receivedNs, func(envelope *manoochv1.Envelope) proto.Message {
+			return &manoochv1.Funding{
+				Env:               envelope,
 				FundingRate:       int64(rate),
 				NextFundingTimeNs: nextNs,
 				// Binance publishes the interval per symbol on a REST endpoint
@@ -149,26 +149,26 @@ func (a *Adapter) Parse(raw []byte, recvNs int64) ([]core.Message, error) {
 			}
 		}),
 	)
-	return msgs, nil
+	return messages, nil
 }
 
 // message builds one normalized message. build receives the envelope so each
 // payload owns its own: sharing one Envelope pointer across three messages
 // would have the publisher stamp the same publish_seq into all of them.
-func (a *Adapter) message(
-	ref core.InstrumentRef,
-	instrument *pb.Instrument,
-	ch pb.Channel,
-	exchangeNs, recvNs int64,
-	build func(*pb.Envelope) proto.Message,
+func (adapter *Adapter) message(
+	reference core.InstrumentRef,
+	instrument *manoochv1.Instrument,
+	channel manoochv1.Channel,
+	exchangeNs, receivedNs int64,
+	build func(*manoochv1.Envelope) proto.Message,
 ) core.Message {
-	spec := core.StreamSpec{Instrument: ref, Channel: ch}
-	env := &pb.Envelope{
+	specification := core.StreamSpec{Instrument: reference, Channel: channel}
+	envelope := &manoochv1.Envelope{
 		Venue:          Venue,
 		Instrument:     instrument,
-		Channel:        ch,
+		Channel:        channel,
 		ExchangeTimeNs: exchangeNs,
-		RecvTimeNs:     recvNs,
+		RecvTimeNs:     receivedNs,
 		// Binance stamps the mark price stream and the premiumIndex response
 		// with the instant it answered, so the difference against arrival is a
 		// clock comparison rather than the age of the value.
@@ -177,15 +177,15 @@ func (a *Adapter) message(
 		// the point: an invented one would let a consumer believe it can
 		// detect venue-side gaps here, which it cannot.
 		VenueSeqPresent: false,
-		Source:          pb.Source_SOURCE_WEBSOCKET,
-		Status:          pb.Status_STATUS_HEALTHY,
+		Source:          manoochv1.Source_SOURCE_WEBSOCKET,
+		Status:          manoochv1.Status_STATUS_HEALTHY,
 	}
 	return core.Message{
-		Key:     publish.Key(Venue, ref.MarketType, ref.Canonical(), ch),
-		Proto:   build(env),
-		TTL:     a.opts.TTLs[ch],
-		Channel: ch,
-		Spec:    spec,
+		Key:           publish.Key(Venue, reference.MarketType, reference.Canonical(), channel),
+		Proto:         build(envelope),
+		TimeToLive:    adapter.options.TimeToLive[channel],
+		Channel:       channel,
+		Specification: specification,
 	}
 }
 
@@ -193,14 +193,16 @@ func (a *Adapter) message(
 // scale is counted apart from a malformed one: it is the single failure that
 // would otherwise publish a plausible wrong price, and it must never be
 // clamped or wrapped into range.
-func numericError(ch pb.Channel, symbol, field, value string, err error) error {
+func numericError(channel manoochv1.Channel, symbol, field, value string, err error) error {
 	kind := core.KindField
 	if errors.Is(err, price.ErrOutOfRange) || errors.Is(err, price.ErrPrecisionLoss) {
 		kind = core.KindRange
 	}
-	return core.NewParseError(kind, ch, symbol, err, "field %q = %q", field, value)
+	return core.NewParseError(kind, channel, symbol, err, "field %q = %q", field, value)
 }
 
-// msToNs converts Binance's millisecond timestamps to the nanoseconds every
-// timestamp on the wire is in.
-func msToNs(ms int64) int64 { return ms * int64(time.Millisecond) }
+// millisecondsToNanoseconds converts Binance's millisecond timestamps to the
+// nanoseconds every timestamp on the wire is in.
+func millisecondsToNanoseconds(milliseconds int64) int64 {
+	return milliseconds * int64(time.Millisecond)
+}

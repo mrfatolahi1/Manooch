@@ -23,7 +23,7 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
-	pb "github.com/you/manooch/gen/manoochv1"
+	"github.com/you/manooch/gen/manoochv1"
 	"github.com/you/manooch/internal/core"
 	"github.com/you/manooch/internal/publish"
 )
@@ -45,23 +45,23 @@ func main() {
 
 func run() error {
 	var (
-		venue   = flag.String("venue", "", "restrict to one venue (default: all)")
-		addr    = flag.String("redis", "127.0.0.1:6379", "Redis address")
-		db      = flag.Int("db", 0, "Redis database")
-		noColor = flag.Bool("no-color", false, "never colourise output")
+		venue    = flag.String("venue", "", "restrict to one venue (default: all)")
+		address  = flag.String("redis", "127.0.0.1:6379", "Redis address")
+		database = flag.Int("db", 0, "Redis database")
+		noColor  = flag.Bool("no-color", false, "never colourise output")
 	)
 	flag.Parse()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	rdb := redis.NewClient(&redis.Options{Addr: *addr, DB: *db})
-	defer rdb.Close()
-	if err := rdb.Ping(ctx).Err(); err != nil {
-		return fmt.Errorf("redis %s: %w", *addr, err)
+	redisClient := redis.NewClient(&redis.Options{Addr: *address, DB: *database})
+	defer redisClient.Close()
+	if err := redisClient.Ping(ctx).Err(); err != nil {
+		return fmt.Errorf("redis %s: %w", *address, err)
 	}
 
-	keys, err := scanKeys(ctx, rdb, publish.MatchPattern(*venue))
+	keys, err := scanKeys(ctx, redisClient, publish.MatchPattern(*venue))
 	if err != nil {
 		return err
 	}
@@ -70,7 +70,7 @@ func run() error {
 		return nil
 	}
 
-	rows, err := readRows(ctx, rdb, keys)
+	rows, err := readRows(ctx, redisClient, keys)
 	if err != nil {
 		return err
 	}
@@ -82,13 +82,13 @@ func run() error {
 
 // scanKeys uses SCAN, never KEYS: KEYS walks the whole keyspace in one blocking
 // call and stalls every publisher behind it.
-func scanKeys(ctx context.Context, rdb *redis.Client, pattern string) ([]string, error) {
+func scanKeys(ctx context.Context, redisClient *redis.Client, pattern string) ([]string, error) {
 	var (
 		keys   []string
 		cursor uint64
 	)
 	for {
-		batch, next, err := rdb.Scan(ctx, cursor, pattern, 500).Result()
+		batch, next, err := redisClient.Scan(ctx, cursor, pattern, 500).Result()
 		if err != nil {
 			return nil, fmt.Errorf("scan %s: %w", pattern, err)
 		}
@@ -101,55 +101,55 @@ func scanKeys(ctx context.Context, rdb *redis.Client, pattern string) ([]string,
 }
 
 type row struct {
-	key        string
-	venue      string
-	marketType string
-	symbol     string
-	channel    string
-	status     pb.Status
-	statusText string
-	age        time.Duration
-	source     string
-	ttl        time.Duration
-	ttlText    string
-	publishSeq uint64
-	restarts   uint32
-	reason     string
+	key             string
+	venue           string
+	marketType      string
+	symbol          string
+	channel         string
+	status          manoochv1.Status
+	statusText      string
+	age             time.Duration
+	source          string
+	timeToLive      time.Duration
+	ttlText         string
+	publishSequence uint64
+	restarts        uint32
+	reason          string
 
 	// venueScoped marks a Manooch:{VENUE}:venue:{subject} row, which describes
 	// the connection rather than any one instrument.
 	venueScoped bool
 	// health is set on any row carrying a Health payload, which is what the
 	// restart counts are attached from.
-	health *pb.Health
+	health *manoochv1.Health
 }
 
-func (r row) less(o row) bool {
-	if r.venue != o.venue {
-		return r.venue < o.venue
+func (current row) less(other row) bool {
+	if current.venue != other.venue {
+		return current.venue < other.venue
 	}
 	// The connection-level row first: everything under it is conditional on
 	// the socket being up, so reading it second is reading it backwards.
-	if r.venueScoped != o.venueScoped {
-		return r.venueScoped
+	if current.venueScoped != other.venueScoped {
+		return current.venueScoped
 	}
-	if r.marketType != o.marketType {
-		return r.marketType < o.marketType
+	if current.marketType != other.marketType {
+		return current.marketType < other.marketType
 	}
-	if r.symbol != o.symbol {
-		return r.symbol < o.symbol
+	if current.symbol != other.symbol {
+		return current.symbol < other.symbol
 	}
-	return r.channel < o.channel
+	return current.channel < other.channel
 }
 
 // readRows fetches every value and its remaining TTL in one round trip.
-func readRows(ctx context.Context, rdb *redis.Client, keys []string) ([]row, error) {
-	pipe := rdb.Pipeline()
-	gets := make([]*redis.StringCmd, len(keys))
-	ttls := make([]*redis.DurationCmd, len(keys))
+func readRows(ctx context.Context, redisClient *redis.Client, keys []string) ([]row, error) {
+	pipe := redisClient.Pipeline()
+	getCommands := make([]*redis.StringCmd, len(keys))
+	timeToLives := make([]*redis.DurationCmd, len(keys))
 	for i, k := range keys {
-		gets[i] = pipe.Get(ctx, k)
-		ttls[i] = pipe.PTTL(ctx, k)
+		getCommands[i] = pipe.Get(ctx, k)
+		timeToLives[i] = pipe.PTTL(ctx, k)
 	}
 	if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
 		return nil, fmt.Errorf("read: %w", err)
@@ -158,80 +158,80 @@ func readRows(ctx context.Context, rdb *redis.Client, keys []string) ([]row, err
 	now := time.Now()
 	rows := make([]row, 0, len(keys))
 	for i, k := range keys {
-		r := row{key: k, venue: "?", marketType: "?", symbol: "?", channel: "?", ttlText: "-", source: "-", statusText: "-"}
+		row := row{key: k, venue: "?", marketType: "?", symbol: "?", channel: "?", ttlText: "-", source: "-", statusText: "-"}
 
 		parts, err := publish.ParseKey(k)
 		if err != nil {
-			r.reason = "unparseable key"
-			rows = append(rows, r)
+			row.reason = "unparseable key"
+			rows = append(rows, row)
 			continue
 		}
-		r.venue = parts.Venue
-		r.venueScoped = parts.VenueScoped
+		row.venue = parts.Venue
+		row.venueScoped = parts.VenueScoped
 		if parts.VenueScoped {
 			// Nothing about a connection belongs to one instrument.
-			r.marketType, r.channel, r.symbol = publish.VenueScope, parts.Subject, "-"
+			row.marketType, row.channel, row.symbol = publish.VenueScope, parts.Subject, "-"
 		} else {
-			r.marketType = core.MarketTypeName(parts.MarketType)
-			r.symbol = parts.Symbol
-			r.channel = core.ChannelName(parts.Channel)
+			row.marketType = core.MarketTypeName(parts.MarketType)
+			row.symbol = parts.Symbol
+			row.channel = core.ChannelName(parts.Channel)
 		}
 
 		// -1 is a key with no expiry; -2 is one that vanished since the SCAN.
-		switch d, err := ttls[i].Result(); {
+		switch duration, err := timeToLives[i].Result(); {
 		case err != nil:
-			r.ttlText = "?"
-		case d == -1:
-			r.ttlText = "none"
-		case d < 0:
-			r.ttlText = "expired"
+			row.ttlText = "?"
+		case duration == -1:
+			row.ttlText = "none"
+		case duration < 0:
+			row.ttlText = "expired"
 		default:
-			r.ttl, r.ttlText = d, compactDuration(d)
+			row.timeToLive, row.ttlText = duration, compactDuration(duration)
 		}
 
-		payload, err := gets[i].Bytes()
+		payload, err := getCommands[i].Bytes()
 		if err != nil {
-			r.reason = "expired between scan and read"
-			rows = append(rows, r)
+			row.reason = "expired between scan and read"
+			rows = append(rows, row)
 			continue
 		}
 
-		ch := parts.Channel
+		channel := parts.Channel
 		if parts.VenueScoped {
-			sub, ok := publish.ChannelForSubject(parts.Subject)
+			subjectChannel, ok := publish.ChannelForSubject(parts.Subject)
 			if !ok {
-				r.reason = fmt.Sprintf("%d bytes", len(payload))
-				rows = append(rows, r)
+				row.reason = fmt.Sprintf("%d bytes", len(payload))
+				rows = append(rows, row)
 				continue
 			}
-			ch = sub
+			channel = subjectChannel
 		}
 
-		msg, env, err := publish.Decode(ch, payload)
+		message, envelope, err := publish.Decode(channel, payload)
 		if err != nil {
-			r.reason = "decode: " + err.Error()
-			rows = append(rows, r)
+			row.reason = "decode: " + err.Error()
+			rows = append(rows, row)
 			continue
 		}
-		r.status = env.Status
-		r.statusText = core.StatusName(env.Status)
-		r.age = now.Sub(time.Unix(0, env.PublishTimeNs))
-		r.source = "-" // health carries no source of its own
-		if env.Source != pb.Source_SOURCE_UNSPECIFIED {
-			r.source = core.SourceName(env.Source)
+		row.status = envelope.Status
+		row.statusText = core.StatusName(envelope.Status)
+		row.age = now.Sub(time.Unix(0, envelope.PublishTimeNs))
+		row.source = "-" // health carries no source of its own
+		if envelope.Source != manoochv1.Source_SOURCE_UNSPECIFIED {
+			row.source = core.SourceName(envelope.Source)
 		}
-		r.publishSeq = env.PublishSeq
-		r.reason = env.StatusReason
-		switch m := msg.(type) {
-		case *pb.Health:
-			r.health = m
-			r.restarts = m.StreamRestartCount
-		case *pb.RateLimit:
+		row.publishSequence = envelope.PublishSeq
+		row.reason = envelope.StatusReason
+		switch m := message.(type) {
+		case *manoochv1.Health:
+			row.health = m
+			row.restarts = m.StreamRestartCount
+		case *manoochv1.RateLimit:
 			// Advisory: what this process has spent of the venue's budget.
 			// Spelled out here because no other row carries it.
-			r.reason = strings.TrimSpace(r.reason + " " + budgetSummary(m))
+			row.reason = strings.TrimSpace(row.reason + " " + budgetSummary(m))
 		}
-		rows = append(rows, r)
+		rows = append(rows, row)
 	}
 
 	attachHealth(rows)
@@ -247,72 +247,72 @@ func readRows(ctx context.Context, rdb *redis.Client, keys []string) ([]row, err
 // which is the question worth asking from a table.
 func attachHealth(rows []row) {
 	restarts := map[string]uint32{}
-	for _, r := range rows {
-		if r.health != nil && !r.venueScoped {
-			restarts[r.venue+"|"+r.marketType+"|"+r.symbol] = r.restarts
+	for _, row := range rows {
+		if row.health != nil && !row.venueScoped {
+			restarts[row.venue+"|"+row.marketType+"|"+row.symbol] = row.restarts
 		}
 	}
 
 	for i := range rows {
-		r := &rows[i]
-		if r.venueScoped {
-			r.reason = venueReason(r)
+		row := &rows[i]
+		if row.venueScoped {
+			row.reason = venueReason(row)
 			continue
 		}
-		if r.health == nil {
-			r.restarts = restarts[r.venue+"|"+r.marketType+"|"+r.symbol]
+		if row.health == nil {
+			row.restarts = restarts[row.venue+"|"+row.marketType+"|"+row.symbol]
 		}
 	}
 }
 
 // budgetSummary renders the rate-limit budgets as "rest_weight=3/3000".
-func budgetSummary(m *pb.RateLimit) string {
-	parts := make([]string, 0, len(m.Budgets))
-	for _, b := range m.Budgets {
-		parts = append(parts, fmt.Sprintf("%s=%d/%d", b.Kind, b.Used, b.Capacity))
+func budgetSummary(rateLimit *manoochv1.RateLimit) string {
+	parts := make([]string, 0, len(rateLimit.Budgets))
+	for _, budget := range rateLimit.Budgets {
+		parts = append(parts, fmt.Sprintf("%s=%d/%d", budget.Kind, budget.Used, budget.Capacity))
 	}
 	return strings.Join(parts, " ")
 }
 
 // venueReason spells out what only the connection-level row knows.
-func venueReason(r *row) string {
-	if r.health == nil {
-		return r.reason
+func venueReason(row *row) string {
+	if row.health == nil {
+		return row.reason
 	}
 	parts := []string{}
-	if r.reason != "" {
-		parts = append(parts, r.reason)
+	if row.reason != "" {
+		parts = append(parts, row.reason)
 	}
 	parts = append(parts,
-		fmt.Sprintf("skew=%dms", r.health.ClockSkewMs),
-		fmt.Sprintf("reconnects=%d", r.health.ReconnectCount))
-	if r.health.LeakedGoroutines > 0 {
-		parts = append(parts, fmt.Sprintf("leaked=%d", r.health.LeakedGoroutines))
+		fmt.Sprintf("skew=%dms", row.health.ClockSkewMs),
+		fmt.Sprintf("reconnects=%d", row.health.ReconnectCount))
+	if row.health.LeakedGoroutines > 0 {
+		parts = append(parts, fmt.Sprintf("leaked=%d", row.health.LeakedGoroutines))
 	}
 	return strings.Join(parts, " ")
 }
 
 func print(rows []row, colour bool) {
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "VENUE\tMARKET TYPE\tSYMBOL\tCHANNEL\tSTATUS\tAGE\tSOURCE\tTTL\tRESTARTS\tPUBLISH SEQ\tREASON\t")
+	writer := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(writer, "VENUE\tMARKET TYPE\tSYMBOL\tCHANNEL\tSTATUS\tAGE\tSOURCE\tTTL\tRESTARTS\tPUBLISH SEQ\tREASON\t")
 
 	counts := map[string]int{}
-	for _, r := range rows {
-		counts[r.statusText]++
+	for _, row := range rows {
+		counts[row.statusText]++
 
 		line := fmt.Sprintf("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%d\t%s",
-			r.venue, r.marketType, r.symbol, r.channel,
-			marker(r.status)+r.statusText, compactDuration(r.age), r.source, r.ttlText,
-			r.restarts, r.publishSeq, r.reason)
+			row.venue, row.marketType, row.symbol, row.channel,
+			marker(row.status)+row.statusText, compactDuration(row.age), row.source, row.ttlText,
+			row.restarts, row.publishSequence, row.reason)
 
 		if colour {
-			if c := colourFor(r.status); c != "" {
+			if c := colourFor(row.status); c != "" {
 				line = c + line + ansiReset
 			}
 		}
-		fmt.Fprintln(w, line)
+		fmt.Fprintln(writer, line)
 	}
-	w.Flush()
+	writer.Flush()
 
 	// Keys, not streams: the health keys are rows too, and calling them
 	// streams would make the count disagree with the statuses beside it.
@@ -327,24 +327,24 @@ func print(rows []row, colour bool) {
 
 // marker prefixes anything not healthy, so the row stands out through a pipe or
 // a terminal with no colour.
-func marker(s pb.Status) string {
-	switch s {
-	case pb.Status_STATUS_DEGRADED:
+func marker(status manoochv1.Status) string {
+	switch status {
+	case manoochv1.Status_STATUS_DEGRADED:
 		return "! "
-	case pb.Status_STATUS_STALE:
+	case manoochv1.Status_STATUS_STALE:
 		return "!! "
 	default:
 		return ""
 	}
 }
 
-func colourFor(s pb.Status) string {
-	switch s {
-	case pb.Status_STATUS_DEGRADED:
+func colourFor(status manoochv1.Status) string {
+	switch status {
+	case manoochv1.Status_STATUS_DEGRADED:
 		return ansiYellow
-	case pb.Status_STATUS_STALE:
+	case manoochv1.Status_STATUS_STALE:
 		return ansiRed
-	case pb.Status_STATUS_UNSPECIFIED:
+	case manoochv1.Status_STATUS_UNSPECIFIED:
 		return ansiDim
 	default:
 		return ""
@@ -355,21 +355,21 @@ func colourEnabled(noColor bool) bool {
 	if noColor || os.Getenv("NO_COLOR") != "" {
 		return false
 	}
-	fi, err := os.Stdout.Stat()
-	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+	fileInfo, err := os.Stdout.Stat()
+	return err == nil && fileInfo.Mode()&os.ModeCharDevice != 0
 }
 
-func compactDuration(d time.Duration) string {
+func compactDuration(duration time.Duration) string {
 	switch {
-	case d < 0:
-		return "-" + compactDuration(-d)
-	case d < time.Millisecond:
-		return fmt.Sprintf("%dus", d.Microseconds())
-	case d < time.Second:
-		return fmt.Sprintf("%dms", d.Milliseconds())
-	case d < time.Minute:
-		return fmt.Sprintf("%.1fs", d.Seconds())
+	case duration < 0:
+		return "-" + compactDuration(-duration)
+	case duration < time.Millisecond:
+		return fmt.Sprintf("%dus", duration.Microseconds())
+	case duration < time.Second:
+		return fmt.Sprintf("%dms", duration.Milliseconds())
+	case duration < time.Minute:
+		return fmt.Sprintf("%.1fs", duration.Seconds())
 	default:
-		return d.Truncate(time.Second).String()
+		return duration.Truncate(time.Second).String()
 	}
 }

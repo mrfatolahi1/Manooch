@@ -7,7 +7,7 @@ import (
 	"regexp"
 	"strings"
 
-	pb "github.com/you/manooch/gen/manoochv1"
+	"github.com/you/manooch/gen/manoochv1"
 )
 
 // CanonicalPattern is the shape of a canonical symbol: "BTC_USDT".
@@ -24,18 +24,18 @@ type InstrumentRef struct {
 	Base       string
 	Quote      string
 	Settle     string
-	MarketType pb.MarketType
+	MarketType manoochv1.MarketType
 	Expiry     string // "20260626" for dated futures, "" otherwise
 }
 
 // Canonical returns the venue-independent symbol, "BTC_USDT".
-func (r InstrumentRef) Canonical() string { return r.Base + "_" + r.Quote }
+func (reference InstrumentRef) Canonical() string { return reference.Base + "_" + reference.Quote }
 
 // String renders the full identity, including the parts Canonical drops.
-func (r InstrumentRef) String() string {
-	s := r.Canonical() + ":" + MarketTypeName(r.MarketType)
-	if r.Expiry != "" {
-		s += ":" + r.Expiry
+func (reference InstrumentRef) String() string {
+	s := reference.Canonical() + ":" + MarketTypeName(reference.MarketType)
+	if reference.Expiry != "" {
+		s += ":" + reference.Expiry
 	}
 	return s
 }
@@ -44,36 +44,36 @@ func (r InstrumentRef) String() string {
 // type. Settle follows the market type's convention — linear settles in the
 // quote, inverse in the base, spot in neither — and an adapter whose venue
 // disagrees overwrites it afterwards.
-func ParseCanonical(s string, mt pb.MarketType) (InstrumentRef, error) {
+func ParseCanonical(s string, marketType manoochv1.MarketType) (InstrumentRef, error) {
 	if !canonicalRe.MatchString(s) {
 		return InstrumentRef{}, fmt.Errorf("symbol %q does not match %s", s, CanonicalPattern)
 	}
-	if mt == pb.MarketType_MARKET_TYPE_UNSPECIFIED {
+	if marketType == manoochv1.MarketType_MARKET_TYPE_UNSPECIFIED {
 		return InstrumentRef{}, fmt.Errorf("symbol %q: market type is unspecified", s)
 	}
 
 	base, quote, _ := strings.Cut(s, "_")
-	r := InstrumentRef{Base: base, Quote: quote, MarketType: mt}
+	reference := InstrumentRef{Base: base, Quote: quote, MarketType: marketType}
 	switch {
-	case IsInverse(mt):
-		r.Settle = base
-	case IsDerivative(mt):
-		r.Settle = quote
+	case IsInverse(marketType):
+		reference.Settle = base
+	case IsDerivative(marketType):
+		reference.Settle = quote
 	}
-	return r, nil
+	return reference, nil
 }
 
 // Proto converts to the wire type. venueSymbol is what this venue calls the
 // instrument ("BTCUSDT"); it rides on every message so no consumer has to
 // reconstruct it.
-func (r InstrumentRef) Proto(venueSymbol string) *pb.Instrument {
-	return &pb.Instrument{
-		Base:        r.Base,
-		Quote:       r.Quote,
-		Settle:      r.Settle,
-		MarketType:  r.MarketType,
-		Expiry:      r.Expiry,
-		Canonical:   r.Canonical(),
+func (reference InstrumentRef) Proto(venueSymbol string) *manoochv1.Instrument {
+	return &manoochv1.Instrument{
+		Base:        reference.Base,
+		Quote:       reference.Quote,
+		Settle:      reference.Settle,
+		MarketType:  reference.MarketType,
+		Expiry:      reference.Expiry,
+		Canonical:   reference.Canonical(),
 		VenueSymbol: venueSymbol,
 	}
 }

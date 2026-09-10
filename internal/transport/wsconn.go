@@ -56,11 +56,11 @@ type Options struct {
 
 // A Dialer opens a connection. Adapters take one so a test can hand them a
 // socket that replays fixtures instead of reaching the internet.
-type Dialer func(ctx context.Context, opts Options) (core.Conn, error)
+type Dialer func(ctx context.Context, options Options) (core.Conn, error)
 
 // A Conn is one open websocket, satisfying core.Conn.
 type Conn struct {
-	ws          *websocket.Conn
+	webSocket   *websocket.Conn
 	url         string
 	readTimeout time.Duration
 
@@ -80,86 +80,86 @@ var _ core.Conn = (*Conn)(nil)
 // library turns into a handshake deadline before cloning the client without it,
 // so the established connection is unaffected. No timeout is invented here: the
 // adapter knows what a reasonable connect time is for its venue.
-func Dial(ctx context.Context, opts Options) (core.Conn, error) {
-	if opts.URL == "" {
+func Dial(ctx context.Context, options Options) (core.Conn, error) {
+	if options.URL == "" {
 		return nil, errors.New("transport: no url")
 	}
-	limit := opts.MaxFrameBytes
+	limit := options.MaxFrameBytes
 	if limit <= 0 {
 		limit = DefaultMaxFrameBytes
 	}
 
-	c := &Conn{url: opts.URL, readTimeout: opts.ReadTimeout}
+	connection := &Conn{url: options.URL, readTimeout: options.ReadTimeout}
 
-	ws, resp, err := websocket.Dial(ctx, opts.URL, &websocket.DialOptions{
-		HTTPClient: opts.HTTPClient,
-		HTTPHeader: opts.HTTPHeader,
+	webSocket, response, err := websocket.Dial(ctx, options.URL, &websocket.DialOptions{
+		HTTPClient: options.HTTPClient,
+		HTTPHeader: options.HTTPHeader,
 		// The library replies to a ping before this returns; the counter is
 		// only so a test can prove that happened.
 		OnPingReceived: func(context.Context, []byte) bool {
-			c.serverPings.Add(1)
+			connection.serverPings.Add(1)
 			return true
 		},
 	})
 	if err != nil {
 		// A rejected handshake answers with a status and a body explaining
 		// why; without it the error is an unexplained "bad handshake".
-		if resp != nil {
-			return nil, fmt.Errorf("transport: dial %s: %s: %w", opts.URL, resp.Status, err)
+		if response != nil {
+			return nil, fmt.Errorf("transport: dial %s: %s: %w", options.URL, response.Status, err)
 		}
-		return nil, fmt.Errorf("transport: dial %s: %w", opts.URL, err)
+		return nil, fmt.Errorf("transport: dial %s: %w", options.URL, err)
 	}
-	ws.SetReadLimit(limit)
-	c.ws = ws
-	return c, nil
+	webSocket.SetReadLimit(limit)
+	connection.webSocket = webSocket
+	return connection, nil
 }
 
 // Read blocks for the next frame and returns it with the instant it arrived.
 //
 // It is not safe to call from two goroutines at once; Close and Write are.
-func (c *Conn) Read(ctx context.Context) ([]byte, int64, error) {
+func (connection *Conn) Read(ctx context.Context) ([]byte, int64, error) {
 	readCtx := ctx
-	if c.readTimeout > 0 {
+	if connection.readTimeout > 0 {
 		var cancel context.CancelFunc
-		readCtx, cancel = context.WithTimeout(ctx, c.readTimeout)
+		readCtx, cancel = context.WithTimeout(ctx, connection.readTimeout)
 		defer cancel()
 	}
 
-	_, b, err := c.ws.Read(readCtx)
+	_, b, err := connection.webSocket.Read(readCtx)
 
 	// Stamped here, immediately after the frame lands and before anything
 	// looks at it. Every freshness number and the clock-skew gauge are
 	// measured from this line; taken after parsing they would include our own
 	// work and report the venue as slower than it is.
-	recvNs := time.Now().UnixNano()
+	receivedNs := time.Now().UnixNano()
 
 	if err != nil {
-		return nil, recvNs, c.readError(ctx, err)
+		return nil, receivedNs, connection.readError(ctx, err)
 	}
-	return b, recvNs, nil
+	return b, receivedNs, nil
 }
 
 // readError names the failure. A read timeout arrives as a context deadline on
 // the derived context, which is indistinguishable from a caller-side
 // cancellation unless the parent is checked.
-func (c *Conn) readError(parent context.Context, err error) error {
+func (connection *Conn) readError(parent context.Context, err error) error {
 	switch {
 	case parent.Err() != nil:
 		return parent.Err()
 	case errors.Is(err, context.DeadlineExceeded):
-		return fmt.Errorf("%w (%v)", ErrIdle, c.readTimeout)
+		return fmt.Errorf("%w (%v)", ErrIdle, connection.readTimeout)
 	case errors.Is(err, websocket.ErrMessageTooBig):
 		return ErrFrameTooBig
 	default:
-		return fmt.Errorf("transport: read %s: %w", c.url, err)
+		return fmt.Errorf("transport: read %s: %w", connection.url, err)
 	}
 }
 
 // Write sends one text frame, for venues that require client-initiated
 // application-level pings or a subscription message after connecting.
-func (c *Conn) Write(ctx context.Context, b []byte) error {
-	if err := c.ws.Write(ctx, websocket.MessageText, b); err != nil {
-		return fmt.Errorf("transport: write %s: %w", c.url, err)
+func (connection *Conn) Write(ctx context.Context, b []byte) error {
+	if err := connection.webSocket.Write(ctx, websocket.MessageText, b); err != nil {
+		return fmt.Errorf("transport: write %s: %w", connection.url, err)
 	}
 	return nil
 }
@@ -171,15 +171,15 @@ func (c *Conn) Write(ctx context.Context, b []byte) error {
 // graceful close would deadlock against the very goroutine it has to free.
 // Cancelling a context does not unblock Read either — this is the only thing
 // that does.
-func (c *Conn) Close() error {
-	c.closeOnce.Do(func() { c.closeErr = c.ws.CloseNow() })
-	return c.closeErr
+func (connection *Conn) Close() error {
+	connection.closeOnce.Do(func() { connection.closeErr = connection.webSocket.CloseNow() })
+	return connection.closeErr
 }
 
 // ServerPings is how many ping frames the venue has sent. The library answered
 // each one; a venue that disconnects us for missing pongs while this climbs is
 // asking for something else.
-func (c *Conn) ServerPings() int64 { return c.serverPings.Load() }
+func (connection *Conn) ServerPings() int64 { return connection.serverPings.Load() }
 
 // URL is the address this connection was opened to, for logs.
-func (c *Conn) URL() string { return c.url }
+func (connection *Conn) URL() string { return connection.url }

@@ -37,13 +37,13 @@ const (
 	// refreshes, fallback polls and KuCoin's bullet call.
 	LimitRESTWeight LimitKind = iota
 	// LimitWSConnect is how often a new websocket may be opened.
-	LimitWSConnect
+	LimitWebSocketConnect
 	// LimitSubscriptions is how many subscribe frames may be sent.
 	LimitSubscriptions
 )
 
 // Kinds is every budget, in order, for callers that report on all of them.
-var Kinds = []LimitKind{LimitRESTWeight, LimitWSConnect, LimitSubscriptions}
+var Kinds = []LimitKind{LimitRESTWeight, LimitWebSocketConnect, LimitSubscriptions}
 
 // String renders the kind for logs, metric labels and the advisory Redis key.
 // It is a closed set rather than free text so the metric can be summed.
@@ -51,7 +51,7 @@ func (k LimitKind) String() string {
 	switch k {
 	case LimitRESTWeight:
 		return "rest_weight"
-	case LimitWSConnect:
+	case LimitWebSocketConnect:
 		return "ws_connect"
 	case LimitSubscriptions:
 		return "subscriptions"
@@ -98,26 +98,26 @@ type Bucket struct {
 // Fraction scales a venue's published limit down to the share this process
 // will use. It is never 1: the in-process limiter is blind to the order
 // service, which shares the host's IP and spends against the same budget.
-func (b Bucket) Fraction(f float64) Bucket {
-	b.Capacity = int(float64(b.Capacity) * f)
-	if b.Capacity < 1 {
-		b.Capacity = 1
+func (bucket Bucket) Fraction(f float64) Bucket {
+	bucket.Capacity = int(float64(bucket.Capacity) * f)
+	if bucket.Capacity < 1 {
+		bucket.Capacity = 1
 	}
-	return b
+	return bucket
 }
 
 // interval is how long one unit of budget takes to come back.
-func (b Bucket) interval() time.Duration { return b.Window / time.Duration(b.Capacity) }
+func (bucket Bucket) interval() time.Duration { return bucket.Window / time.Duration(bucket.Capacity) }
 
 // Validate rejects a bucket that cannot be enforced.
-func (b Bucket) Validate(kind LimitKind) error {
+func (bucket Bucket) Validate(kind LimitKind) error {
 	switch {
-	case b.Capacity <= 0:
-		return fmt.Errorf("ratelimit: %s capacity is %d", kind, b.Capacity)
-	case b.Window <= 0:
-		return fmt.Errorf("ratelimit: %s window is %v", kind, b.Window)
-	case b.interval() <= 0:
-		return fmt.Errorf("ratelimit: %s window %v is too short for %d operations", kind, b.Window, b.Capacity)
+	case bucket.Capacity <= 0:
+		return fmt.Errorf("ratelimit: %s capacity is %d", kind, bucket.Capacity)
+	case bucket.Window <= 0:
+		return fmt.Errorf("ratelimit: %s window is %v", kind, bucket.Window)
+	case bucket.interval() <= 0:
+		return fmt.Errorf("ratelimit: %s window %v is too short for %d operations", kind, bucket.Window, bucket.Capacity)
 	}
 	return nil
 }

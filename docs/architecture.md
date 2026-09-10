@@ -52,7 +52,7 @@ graph TD
   feed --> fallback["internal/fallback"]
   feed --> metadata["internal/metadata"]
   feed --> ratelimit["internal/ratelimit"]
-  feed --> obs["internal/obs"]
+  feed --> observability["internal/observability"]
   cli["cmd/manooch-tap<br/>cmd/manooch-status"] --> publish["internal/publish"]
   adapter --> venues["internal/adapter/binance<br/>internal/adapter/kucoin"]
   adapter --> config["internal/config"]
@@ -73,7 +73,7 @@ graph TD
   config --> core
   config --> price
   publish --> core
-  publish --> obs
+  publish --> observability
   core --> gen["gen/manoochv1"]
 ```
 
@@ -133,7 +133,7 @@ The `SET` makes freshness a property of the data — key present means fresh, ke
 | Config reload | Restart only | Behaviour that changes under a running process cannot be reconstructed. |
 | Scope | Perp mark price only; books and trades deleted | Two of four channels carried all the depth and sequencing complexity and none of the value this service exists for. |
 | Venue boundary | One `core.Adapter` per venue, holding no stream state | Supervision can change without touching a venue package; state in the adapter would make that a rewrite. |
-| Parse purity | `Parse` is a pure function of `(frame, recvNs)` | Fixture replay tests nothing otherwise, and a message that differs between identical frames cannot be reasoned about. |
+| Parse purity | `Parse` is a pure function of `(frame, receivedNs)` | Fixture replay tests nothing otherwise, and a message that differs between identical frames cannot be reasoned about. |
 | Cadence | Per channel, in the venue file | KuCoin funding is 60s against 1s mark price; one number would expire the slower key between updates. |
 | Missing data | Skip the message, never substitute a zero | Zero is a real funding rate; an empty one published as zero is a number a strategy trades on. |
 | Failure mode | Supervise; the process never exits on a stream or socket failure | A restart drops every other stream on the venue to fix one, and loses the state that says which. |
@@ -160,7 +160,7 @@ Complete. Every path below is built and every config section is read.
 
 | Path | State |
 |---|---|
-| `pkg/price`, `internal/{core,config,publish,obs}`, `cmd/*` | built |
+| `pkg/price`, `internal/{core,config,publish,observability}`, `cmd/*` | built |
 | `internal/adapter/` | built — `binance` and `kucoin`, plus the shared conformance suite |
 | `internal/transport/` | built — one websocket connection, backoff, circuit breaker |
 | `internal/supervisor/` | built — the restart procedure and both escalation tiers |

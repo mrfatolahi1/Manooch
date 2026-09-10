@@ -74,14 +74,14 @@ func TestParsePrice(t *testing.T) {
 		{"hex", "0x10", 0, ErrSyntax},
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := ParsePrice(tc.in)
-			if !errors.Is(err, tc.err) {
-				t.Fatalf("ParsePrice(%q) error = %v, want %v", tc.in, err, tc.err)
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			got, err := ParsePrice(testCase.in)
+			if !errors.Is(err, testCase.err) {
+				t.Fatalf("ParsePrice(%q) error = %v, want %v", testCase.in, err, testCase.err)
 			}
-			if got != tc.want {
-				t.Fatalf("ParsePrice(%q) = %d, want %d", tc.in, got, tc.want)
+			if got != testCase.want {
+				t.Fatalf("ParsePrice(%q) = %d, want %d", testCase.in, got, testCase.want)
 			}
 		})
 	}
@@ -102,10 +102,10 @@ func TestParseSize(t *testing.T) {
 		{"-1", 0, ErrNegative},
 		{"", 0, ErrEmpty},
 	}
-	for _, tc := range cases {
-		got, err := ParseSize(tc.in)
-		if !errors.Is(err, tc.err) || got != tc.want {
-			t.Errorf("ParseSize(%q) = %d, %v; want %d, %v", tc.in, got, err, tc.want, tc.err)
+	for _, testCase := range cases {
+		got, err := ParseSize(testCase.in)
+		if !errors.Is(err, testCase.err) || got != testCase.want {
+			t.Errorf("ParseSize(%q) = %d, %v; want %d, %v", testCase.in, got, err, testCase.want, testCase.err)
 		}
 	}
 }
@@ -126,10 +126,10 @@ func TestParseRate(t *testing.T) {
 		{"-9223373", 0, ErrOutOfRange},
 		{"0.0000000000001", 0, ErrPrecisionLoss},
 	}
-	for _, tc := range cases {
-		got, err := ParseRate(tc.in)
-		if !errors.Is(err, tc.err) || got != tc.want {
-			t.Errorf("ParseRate(%q) = %d, %v; want %d, %v", tc.in, got, err, tc.want, tc.err)
+	for _, testCase := range cases {
+		got, err := ParseRate(testCase.in)
+		if !errors.Is(err, testCase.err) || got != testCase.want {
+			t.Errorf("ParseRate(%q) = %d, %v; want %d, %v", testCase.in, got, err, testCase.want, testCase.err)
 		}
 	}
 }
@@ -141,12 +141,12 @@ func TestRoundTripCanonical(t *testing.T) {
 		"0.00000000001", "92233720.36854775807", "0.1", "12345.6789",
 	}
 	for _, s := range prices {
-		p, err := ParsePrice(s)
+		price, err := ParsePrice(s)
 		if err != nil {
 			t.Fatalf("ParsePrice(%q): %v", s, err)
 		}
-		if got := p.String(); got != s {
-			t.Errorf("Price round trip: %q -> %d -> %q", s, p, got)
+		if got := price.String(); got != s {
+			t.Errorf("Price round trip: %q -> %d -> %q", s, price, got)
 		}
 	}
 
@@ -177,20 +177,20 @@ func TestRoundTripCanonical(t *testing.T) {
 // canonical output.
 func TestRoundTripNonCanonical(t *testing.T) {
 	for _, in := range []string{"68432.150", "+68432.15", "0068432.15", "6.843215e4", "684321500e-4"} {
-		p, err := ParsePrice(in)
+		price, err := ParsePrice(in)
 		if err != nil {
 			t.Fatalf("ParsePrice(%q): %v", in, err)
 		}
-		if got := p.String(); got != "68432.15" {
+		if got := price.String(); got != "68432.15" {
 			t.Errorf("ParsePrice(%q).String() = %q, want %q", in, got, "68432.15")
 		}
 	}
 }
 
-func TestCmp(t *testing.T) {
+func TestCompare(t *testing.T) {
 	cases := []struct {
-		a, b Price
-		want int
+		first, second Price
+		want          int
 	}{
 		{1, 2, -1},
 		{2, 1, 1},
@@ -200,31 +200,31 @@ func TestCmp(t *testing.T) {
 		{math.MaxInt64, math.MaxInt64, 0},
 		{math.MaxInt64, math.MaxInt64 - 1, 1},
 	}
-	for _, tc := range cases {
-		if got := tc.a.Cmp(tc.b); got != tc.want {
-			t.Errorf("Price(%d).Cmp(%d) = %d, want %d", tc.a, tc.b, got, tc.want)
+	for _, testCase := range cases {
+		if got := testCase.first.Compare(testCase.second); got != testCase.want {
+			t.Errorf("Price(%d).Compare(%d) = %d, want %d", testCase.first, testCase.second, got, testCase.want)
 		}
 	}
 
 	// Rates compare across zero.
-	if got := Rate(-1).Cmp(Rate(1)); got != -1 {
-		t.Errorf("Rate(-1).Cmp(1) = %d, want -1", got)
+	if got := Rate(-1).Compare(Rate(1)); got != -1 {
+		t.Errorf("Rate(-1).Compare(1) = %d, want -1", got)
 	}
-	if got := Rate(0).Cmp(Rate(0)); got != 0 {
-		t.Errorf("Rate(0).Cmp(0) = %d, want 0", got)
+	if got := Rate(0).Compare(Rate(0)); got != 0 {
+		t.Errorf("Rate(0).Compare(0) = %d, want 0", got)
 	}
-	if got := Size(5).Cmp(Size(4)); got != 1 {
-		t.Errorf("Size(5).Cmp(4) = %d, want 1", got)
+	if got := Size(5).Compare(Size(4)); got != 1 {
+		t.Errorf("Size(5).Compare(4) = %d, want 1", got)
 	}
 }
 
 func TestFloatIsApproximate(t *testing.T) {
-	p, err := ParsePrice("68432.15")
+	price, err := ParsePrice("68432.15")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if math.Abs(p.Float()-68432.15) > 1e-6 {
-		t.Errorf("Price.Float() = %v, want ~68432.15", p.Float())
+	if math.Abs(price.Float()-68432.15) > 1e-6 {
+		t.Errorf("Price.Float() = %v, want ~68432.15", price.Float())
 	}
 	if got := Rate(-100_000_000).Float(); math.Abs(got-(-0.0001)) > 1e-12 {
 		t.Errorf("Rate.Float() = %v, want ~-0.0001", got)
@@ -246,32 +246,32 @@ func FuzzParsePrice(f *testing.F) {
 	}
 
 	f.Fuzz(func(t *testing.T, s string) {
-		p, err := ParsePrice(s)
+		price, err := ParsePrice(s)
 		if err != nil {
-			if p != 0 {
-				t.Fatalf("ParsePrice(%q) returned %d alongside error %v", s, p, err)
+			if price != 0 {
+				t.Fatalf("ParsePrice(%q) returned %d alongside error %v", s, price, err)
 			}
 			return
 		}
-		if p < 0 {
-			t.Fatalf("ParsePrice(%q) = %d: negative result means the value wrapped", s, p)
+		if price < 0 {
+			t.Fatalf("ParsePrice(%q) = %d: negative result means the value wrapped", s, price)
 		}
 		// A successful parse must round-trip through its canonical form.
-		again, err := ParsePrice(p.String())
+		again, err := ParsePrice(price.String())
 		if err != nil {
-			t.Fatalf("ParsePrice(%q) = %d, but re-parsing %q failed: %v", s, p, p.String(), err)
+			t.Fatalf("ParsePrice(%q) = %d, but re-parsing %q failed: %v", s, price, price.String(), err)
 		}
-		if again != p {
-			t.Fatalf("ParsePrice(%q) = %d, re-parse of %q = %d", s, p, p.String(), again)
+		if again != price {
+			t.Fatalf("ParsePrice(%q) = %d, re-parse of %q = %d", s, price, price.String(), again)
 		}
 
 		// Sizes and rates share the parser.
-		if sz, err := ParseSize(s); err == nil && sz < 0 {
-			t.Fatalf("ParseSize(%q) = %d: negative result means the value wrapped", s, sz)
+		if size, err := ParseSize(s); err == nil && size < 0 {
+			t.Fatalf("ParseSize(%q) = %d: negative result means the value wrapped", s, size)
 		}
-		if r, err := ParseRate(s); err == nil {
-			if again, err := ParseRate(r.String()); err != nil || again != r {
-				t.Fatalf("ParseRate(%q) = %d, re-parse of %q = %d, %v", s, r, r.String(), again, err)
+		if rate, err := ParseRate(s); err == nil {
+			if again, err := ParseRate(rate.String()); err != nil || again != rate {
+				t.Fatalf("ParseRate(%q) = %d, re-parse of %q = %d, %v", s, rate, rate.String(), again, err)
 			}
 		}
 	})

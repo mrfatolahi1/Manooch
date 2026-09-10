@@ -16,7 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	pb "github.com/you/manooch/gen/manoochv1"
+	"github.com/you/manooch/gen/manoochv1"
 	"github.com/you/manooch/internal/core"
 	"github.com/you/manooch/internal/publish"
 	"github.com/you/manooch/pkg/price"
@@ -42,7 +42,7 @@ type Conn struct {
 	reads  atomic.Int64
 	closes atomic.Int64
 
-	mu       sync.Mutex
+	mutex    sync.Mutex
 	wedged   bool
 	idle     time.Duration
 	idleErr  error
@@ -67,59 +67,59 @@ func NewConn() *Conn {
 }
 
 // Push queues one frame for the next Read.
-func (c *Conn) Push(frame []byte) { c.frames <- delivery{frame: frame} }
+func (connection *Conn) Push(frame []byte) { connection.frames <- delivery{frame: frame} }
 
 // PushError queues a read failure: the socket dropping, a protocol error, a
 // frame past the size limit.
-func (c *Conn) PushError(err error) { c.frames <- delivery{err: err} }
+func (connection *Conn) PushError(err error) { connection.frames <- delivery{err: err} }
 
 // Wedge makes Close stop unblocking Read, which is a socket whose read call
 // never comes back. It is how a leaked goroutine is produced on purpose.
-func (c *Conn) Wedge() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.wedged = true
+func (connection *Conn) Wedge() {
+	connection.mutex.Lock()
+	defer connection.mutex.Unlock()
+	connection.wedged = true
 }
 
 // Silent makes Read return err after d with no frame, which is a connection
 // that is up and delivering nothing — the failure TCP will otherwise hold open
 // forever.
-func (c *Conn) Silent(d time.Duration, err error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.idle, c.idleErr = d, err
+func (connection *Conn) Silent(duration time.Duration, err error) {
+	connection.mutex.Lock()
+	defer connection.mutex.Unlock()
+	connection.idle, connection.idleErr = duration, err
 }
 
 // FailWrites makes every Write return err.
-func (c *Conn) FailWrites(err error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.writeErr = err
+func (connection *Conn) FailWrites(err error) {
+	connection.mutex.Lock()
+	defer connection.mutex.Unlock()
+	connection.writeErr = err
 }
 
 // Read blocks for the next frame. It does not watch ctx.
-func (c *Conn) Read(context.Context) ([]byte, int64, error) {
-	c.reads.Add(1)
+func (connection *Conn) Read(context.Context) ([]byte, int64, error) {
+	connection.reads.Add(1)
 
-	c.mu.Lock()
-	wedged, idle, idleErr := c.wedged, c.idle, c.idleErr
-	c.mu.Unlock()
+	connection.mutex.Lock()
+	wedged, idle, idleErr := connection.wedged, connection.idle, connection.idleErr
+	connection.mutex.Unlock()
 
 	var deadline <-chan time.Time
 	if idle > 0 {
-		t := time.NewTimer(idle)
-		defer t.Stop()
-		deadline = t.C
+		timer := time.NewTimer(idle)
+		defer timer.Stop()
+		deadline = timer.C
 	}
 
-	closed := c.closed
+	closed := connection.closed
 	if wedged {
 		closed = nil // a read that Close does not free
 	}
 
 	select {
-	case d := <-c.frames:
-		return d.frame, time.Now().UnixNano(), d.err
+	case delivery := <-connection.frames:
+		return delivery.frame, time.Now().UnixNano(), delivery.err
 	case <-closed:
 		return nil, time.Now().UnixNano(), ErrClosed
 	case <-deadline:
@@ -128,37 +128,37 @@ func (c *Conn) Read(context.Context) ([]byte, int64, error) {
 }
 
 // Write records the frame.
-func (c *Conn) Write(_ context.Context, b []byte) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.writeErr != nil {
-		return c.writeErr
+func (connection *Conn) Write(_ context.Context, b []byte) error {
+	connection.mutex.Lock()
+	defer connection.mutex.Unlock()
+	if connection.writeErr != nil {
+		return connection.writeErr
 	}
-	c.writes = append(c.writes, append([]byte(nil), b...))
+	connection.writes = append(connection.writes, append([]byte(nil), b...))
 	return nil
 }
 
 // Close unblocks Read, unless the connection has been wedged.
-func (c *Conn) Close() error {
-	c.closes.Add(1)
-	c.once.Do(func() { close(c.closed) })
+func (connection *Conn) Close() error {
+	connection.closes.Add(1)
+	connection.once.Do(func() { close(connection.closed) })
 	return nil
 }
 
 // Reads is how many times Read has been entered.
-func (c *Conn) Reads() int64 { return c.reads.Load() }
+func (connection *Conn) Reads() int64 { return connection.reads.Load() }
 
 // Closes is how many times Close has been called.
-func (c *Conn) Closes() int64 { return c.closes.Load() }
+func (connection *Conn) Closes() int64 { return connection.closes.Load() }
 
 // IsClosed reports whether Close has been called.
-func (c *Conn) IsClosed() bool { return c.closes.Load() > 0 }
+func (connection *Conn) IsClosed() bool { return connection.closes.Load() > 0 }
 
 // Writes is every frame written, in order.
-func (c *Conn) Writes() [][]byte {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return append([][]byte(nil), c.writes...)
+func (connection *Conn) Writes() [][]byte {
+	connection.mutex.Lock()
+	defer connection.mutex.Unlock()
+	return append([][]byte(nil), connection.writes...)
 }
 
 // ---------- Adapter ----------
@@ -167,7 +167,7 @@ func (c *Conn) Writes() [][]byte {
 const Venue = "TESTVENUE"
 
 // MarketType is the only market the double serves.
-const MarketType = pb.MarketType_MARKET_TYPE_PERP_LINEAR
+const MarketType = manoochv1.MarketType_MARKET_TYPE_PERP_LINEAR
 
 // An Adapter is a core.Adapter under test control.
 //
@@ -176,18 +176,18 @@ const MarketType = pb.MarketType_MARKET_TYPE_PERP_LINEAR
 // a symbol into a Conn rather than by hand-building venue JSON.
 type Adapter struct {
 	// Channels is what one frame becomes. Zero means the three in scope.
-	Channels []pb.Channel
+	Channels []manoochv1.Channel
 	// TTL is stamped on every message. Zero means one second.
-	TTL time.Duration
+	TimeToLive time.Duration
 	// MaxStreamsPerSocket caps a plan. Zero means everything on one socket.
 	MaxStreamsPerSocket int
 
 	// DialFunc, ParseFunc, FetchFunc and MetadataFunc replace the defaults
 	// below.
 	DialFunc     func(context.Context, core.SocketPlan) (core.Conn, error)
-	ParseFunc    func(frame []byte, recvNs int64) ([]core.Message, error)
+	ParseFunc    func(frame []byte, receivedNs int64) ([]core.Message, error)
 	FetchFunc    func(context.Context, core.StreamSpec) ([]core.Message, error)
-	MetadataFunc func(context.Context, pb.MarketType) ([]*pb.InstrumentMeta, error)
+	MetadataFunc func(context.Context, manoochv1.MarketType) ([]*manoochv1.InstrumentMeta, error)
 
 	dials atomic.Int64
 }
@@ -195,197 +195,197 @@ type Adapter struct {
 var _ core.Adapter = (*Adapter)(nil)
 
 // Venue returns the double's venue name.
-func (a *Adapter) Venue() string { return Venue }
+func (adapter *Adapter) Venue() string { return Venue }
 
 // Dials is how many connection attempts have been made, which is what a
 // circuit-breaker test asserts is zero.
-func (a *Adapter) Dials() int64 { return a.dials.Load() }
+func (adapter *Adapter) Dials() int64 { return adapter.dials.Load() }
 
-func (a *Adapter) channels() []pb.Channel {
-	if len(a.Channels) > 0 {
-		return a.Channels
+func (adapter *Adapter) channels() []manoochv1.Channel {
+	if len(adapter.Channels) > 0 {
+		return adapter.Channels
 	}
-	return []pb.Channel{
-		pb.Channel_CHANNEL_MARK_PRICE,
-		pb.Channel_CHANNEL_INDEX_PRICE,
-		pb.Channel_CHANNEL_FUNDING,
+	return []manoochv1.Channel{
+		manoochv1.Channel_CHANNEL_MARK_PRICE,
+		manoochv1.Channel_CHANNEL_INDEX_PRICE,
+		manoochv1.Channel_CHANNEL_FUNDING,
 	}
 }
 
-func (a *Adapter) ttl() time.Duration {
-	if a.TTL > 0 {
-		return a.TTL
+func (adapter *Adapter) timeToLive() time.Duration {
+	if adapter.TimeToLive > 0 {
+		return adapter.TimeToLive
 	}
 	return time.Second
 }
 
 // VenueSymbol strips the separator: BTC_USDT becomes BTCUSDT.
-func (a *Adapter) VenueSymbol(ref core.InstrumentRef) (string, error) {
-	if ref.MarketType != MarketType {
-		return "", fmt.Errorf("coretest: %s is not served", ref)
+func (adapter *Adapter) VenueSymbol(reference core.InstrumentRef) (string, error) {
+	if reference.MarketType != MarketType {
+		return "", fmt.Errorf("coretest: %s is not served", reference)
 	}
-	return strings.ReplaceAll(ref.Canonical(), "_", ""), nil
+	return strings.ReplaceAll(reference.Canonical(), "_", ""), nil
 }
 
 // ParseVenueSymbol splits on the quote assets the double knows.
-func (a *Adapter) ParseVenueSymbol(s string, mt pb.MarketType) (core.InstrumentRef, error) {
+func (adapter *Adapter) ParseVenueSymbol(s string, marketType manoochv1.MarketType) (core.InstrumentRef, error) {
 	up := strings.ToUpper(s)
 	if strings.Contains(up, "_") {
-		return core.ParseCanonical(up, mt)
+		return core.ParseCanonical(up, marketType)
 	}
 	for _, q := range []string{"USDT", "USDC", "USD"} {
 		if base, ok := strings.CutSuffix(up, q); ok && base != "" {
-			return core.ParseCanonical(base+"_"+q, mt)
+			return core.ParseCanonical(base+"_"+q, marketType)
 		}
 	}
 	return core.InstrumentRef{}, fmt.Errorf("coretest: %q ends in no known quote", s)
 }
 
-// PlanSubscriptions puts every spec on one socket unless MaxStreamsPerSocket
-// says otherwise.
-func (a *Adapter) PlanSubscriptions(specs []core.StreamSpec) ([]core.SocketPlan, error) {
-	if len(specs) == 0 {
+// PlanSubscriptions puts every specification on one socket unless
+// MaxStreamsPerSocket says otherwise.
+func (adapter *Adapter) PlanSubscriptions(specifications []core.StreamSpec) ([]core.SocketPlan, error) {
+	if len(specifications) == 0 {
 		return nil, nil
 	}
-	size := a.MaxStreamsPerSocket
+	size := adapter.MaxStreamsPerSocket
 	if size <= 0 {
-		size = len(specs)
+		size = len(specifications)
 	}
 	var plans []core.SocketPlan
-	for i := 0; i < len(specs); i += size {
+	for i := 0; i < len(specifications); i += size {
 		plans = append(plans, core.SocketPlan{
-			ID:    fmt.Sprintf("test-%d", len(plans)),
-			Specs: specs[i:min(i+size, len(specs))],
+			ID:             fmt.Sprintf("test-%d", len(plans)),
+			Specifications: specifications[i:min(i+size, len(specifications))],
 		})
 	}
 	return plans, nil
 }
 
 // Dial hands back whatever DialFunc returns, counting the attempt.
-func (a *Adapter) Dial(ctx context.Context, plan core.SocketPlan) (core.Conn, error) {
-	a.dials.Add(1)
-	if a.DialFunc != nil {
-		return a.DialFunc(ctx, plan)
+func (adapter *Adapter) Dial(ctx context.Context, plan core.SocketPlan) (core.Conn, error) {
+	adapter.dials.Add(1)
+	if adapter.DialFunc != nil {
+		return adapter.DialFunc(ctx, plan)
 	}
 	return NewConn(), nil
 }
 
 // Parse turns one frame into messages.
-func (a *Adapter) Parse(frame []byte, recvNs int64) ([]core.Message, error) {
-	if a.ParseFunc != nil {
-		return a.ParseFunc(frame, recvNs)
+func (adapter *Adapter) Parse(frame []byte, receivedNs int64) ([]core.Message, error) {
+	if adapter.ParseFunc != nil {
+		return adapter.ParseFunc(frame, receivedNs)
 	}
 	symbol := strings.TrimSpace(string(frame))
 	if symbol == "" {
 		return nil, nil // a pong: normal traffic, not a failure
 	}
-	ref, err := core.ParseCanonical(symbol, MarketType)
+	reference, err := core.ParseCanonical(symbol, MarketType)
 	if err != nil {
-		return nil, core.NewParseError(core.KindField, pb.Channel_CHANNEL_UNSPECIFIED, symbol, err, "symbol")
+		return nil, core.NewParseError(core.KindField, manoochv1.Channel_CHANNEL_UNSPECIFIED, symbol, err, "symbol")
 	}
 
-	out := make([]core.Message, 0, len(a.channels()))
-	for _, ch := range a.channels() {
-		out = append(out, a.Message(core.StreamSpec{Instrument: ref, Channel: ch}, recvNs, pb.Source_SOURCE_WEBSOCKET))
+	out := make([]core.Message, 0, len(adapter.channels()))
+	for _, channel := range adapter.channels() {
+		out = append(out, adapter.Message(core.StreamSpec{Instrument: reference, Channel: channel}, receivedNs, manoochv1.Source_SOURCE_WEBSOCKET))
 	}
 	return out, nil
 }
 
 // FetchOnce is the REST fallback. The default answers the requested channel
 // with a message marked SOURCE_REST.
-func (a *Adapter) FetchOnce(ctx context.Context, spec core.StreamSpec) ([]core.Message, error) {
-	if a.FetchFunc != nil {
-		return a.FetchFunc(ctx, spec)
+func (adapter *Adapter) FetchOnce(ctx context.Context, specification core.StreamSpec) ([]core.Message, error) {
+	if adapter.FetchFunc != nil {
+		return adapter.FetchFunc(ctx, specification)
 	}
-	return []core.Message{a.Message(spec, time.Now().UnixNano(), pb.Source_SOURCE_REST)}, nil
+	return []core.Message{adapter.Message(specification, time.Now().UnixNano(), manoochv1.Source_SOURCE_REST)}, nil
 }
 
 // FetchMetadata answers with whatever MetadataFunc returns. Without one it
 // answers ErrNotImplemented, which is what a venue that cannot do it says.
-func (a *Adapter) FetchMetadata(ctx context.Context, mt pb.MarketType) ([]*pb.InstrumentMeta, error) {
-	if a.MetadataFunc != nil {
-		return a.MetadataFunc(ctx, mt)
+func (adapter *Adapter) FetchMetadata(ctx context.Context, marketType manoochv1.MarketType) ([]*manoochv1.InstrumentMeta, error) {
+	if adapter.MetadataFunc != nil {
+		return adapter.MetadataFunc(ctx, marketType)
 	}
 	return nil, core.ErrNotImplemented
 }
 
-// Meta builds one instrument's metadata, with a valid envelope so the
+// Metadata builds one instrument's metadata, with a valid envelope so the
 // publisher accepts it.
-func (a *Adapter) Meta(ref core.InstrumentRef, tick price.Price, lot price.Size, recvNs int64) *pb.InstrumentMeta {
-	venueSymbol, _ := a.VenueSymbol(ref)
-	return &pb.InstrumentMeta{
-		Env: &pb.Envelope{
+func (adapter *Adapter) Metadata(reference core.InstrumentRef, tick price.Price, lot price.Size, receivedNs int64) *manoochv1.InstrumentMeta {
+	venueSymbol, _ := adapter.VenueSymbol(reference)
+	return &manoochv1.InstrumentMeta{
+		Env: &manoochv1.Envelope{
 			Venue:      Venue,
-			Instrument: ref.Proto(venueSymbol),
-			Channel:    pb.Channel_CHANNEL_METADATA,
-			RecvTimeNs: recvNs,
-			Source:     pb.Source_SOURCE_REST,
-			Status:     pb.Status_STATUS_HEALTHY,
+			Instrument: reference.Proto(venueSymbol),
+			Channel:    manoochv1.Channel_CHANNEL_METADATA,
+			RecvTimeNs: receivedNs,
+			Source:     manoochv1.Source_SOURCE_REST,
+			Status:     manoochv1.Status_STATUS_HEALTHY,
 		},
 		TickSize:           int64(tick),
 		LotSize:            int64(lot),
 		MinSize:            int64(lot),
 		ContractMultiplier: price.SizeScale,
 		Active:             true,
-		LastRefreshNs:      recvNs,
+		LastRefreshNs:      receivedNs,
 	}
 }
 
 // RESTCost is one weight unit for everything.
-func (a *Adapter) RESTCost(core.Operation) int { return 1 }
+func (adapter *Adapter) RESTCost(core.Operation) int { return 1 }
 
-// Message builds one normalized message for a spec, with a valid envelope: the
-// publisher refuses anything whose status is unset, so a double that skipped
-// the envelope would only ever test the rejection path.
-func (a *Adapter) Message(spec core.StreamSpec, recvNs int64, src pb.Source) core.Message {
-	venueSymbol, _ := a.VenueSymbol(spec.Instrument)
+// Message builds one normalized message for a specification, with a valid
+// envelope: the publisher refuses anything whose status is unset, so a double
+// that skipped the envelope would only ever test the rejection path.
+func (adapter *Adapter) Message(specification core.StreamSpec, receivedNs int64, source manoochv1.Source) core.Message {
+	venueSymbol, _ := adapter.VenueSymbol(specification.Instrument)
 	v, _ := price.ParsePrice("68432.15")
 
-	env := &pb.Envelope{
+	envelope := &manoochv1.Envelope{
 		Venue:      Venue,
-		Instrument: spec.Instrument.Proto(venueSymbol),
-		Channel:    spec.Channel,
+		Instrument: specification.Instrument.Proto(venueSymbol),
+		Channel:    specification.Channel,
 		// The double stamps the arrival instant as the venue's, so the skew it
 		// reports is zero rather than absent: a test about reconnects should
 		// not have to reason about a clock as well.
-		ExchangeTimeNs:         recvNs,
-		RecvTimeNs:             recvNs,
+		ExchangeTimeNs:         receivedNs,
+		RecvTimeNs:             receivedNs,
 		ExchangeTimeIsSendTime: true,
-		Source:                 src,
-		Status:                 pb.Status_STATUS_HEALTHY,
+		Source:                 source,
+		Status:                 manoochv1.Status_STATUS_HEALTHY,
 	}
 
 	var payload proto.Message
-	switch spec.Channel {
-	case pb.Channel_CHANNEL_INDEX_PRICE:
-		payload = &pb.IndexPrice{Env: env, IndexPrice: int64(v)}
-	case pb.Channel_CHANNEL_FUNDING:
+	switch specification.Channel {
+	case manoochv1.Channel_CHANNEL_INDEX_PRICE:
+		payload = &manoochv1.IndexPrice{Env: envelope, IndexPrice: int64(v)}
+	case manoochv1.Channel_CHANNEL_FUNDING:
 		rate, _ := price.ParseRate("0.0001")
-		payload = &pb.Funding{Env: env, FundingRate: int64(rate), NextFundingTimeNs: recvNs}
+		payload = &manoochv1.Funding{Env: envelope, FundingRate: int64(rate), NextFundingTimeNs: receivedNs}
 	default:
-		payload = &pb.MarkPrice{Env: env, MarkPrice: int64(v)}
+		payload = &manoochv1.MarkPrice{Env: envelope, MarkPrice: int64(v)}
 	}
 
 	return core.Message{
-		Key:     publish.Key(Venue, spec.Instrument.MarketType, spec.Instrument.Canonical(), spec.Channel),
-		Proto:   payload,
-		TTL:     a.ttl(),
-		Channel: spec.Channel,
-		Spec:    spec,
+		Key:           publish.Key(Venue, specification.Instrument.MarketType, specification.Instrument.Canonical(), specification.Channel),
+		Proto:         payload,
+		TimeToLive:    adapter.timeToLive(),
+		Channel:       specification.Channel,
+		Specification: specification,
 	}
 }
 
-// Specs expands canonical symbols into one spec per channel.
-func Specs(symbols ...string) ([]core.StreamSpec, error) {
-	a := &Adapter{}
+// Specifications expands canonical symbols into one specification per channel.
+func Specifications(symbols ...string) ([]core.StreamSpec, error) {
+	adapter := &Adapter{}
 	var out []core.StreamSpec
-	for _, sym := range symbols {
-		ref, err := core.ParseCanonical(sym, MarketType)
+	for _, symbol := range symbols {
+		reference, err := core.ParseCanonical(symbol, MarketType)
 		if err != nil {
 			return nil, err
 		}
-		for _, ch := range a.channels() {
-			out = append(out, core.StreamSpec{Instrument: ref, Channel: ch})
+		for _, channel := range adapter.channels() {
+			out = append(out, core.StreamSpec{Instrument: reference, Channel: channel})
 		}
 	}
 	return out, nil

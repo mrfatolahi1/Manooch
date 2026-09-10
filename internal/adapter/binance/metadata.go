@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	pb "github.com/you/manooch/gen/manoochv1"
+	"github.com/you/manooch/gen/manoochv1"
 	"github.com/you/manooch/internal/core"
 	"github.com/you/manooch/internal/ratelimit"
 	"github.com/you/manooch/pkg/price"
@@ -73,143 +73,143 @@ type exchangeFilter struct {
 //
 // A symbol that is served but whose filters do not parse is an error. That is
 // the difference between "not ours" and "ours, and wrong".
-func (a *Adapter) FetchMetadata(ctx context.Context, mt pb.MarketType) ([]*pb.InstrumentMeta, error) {
-	if mt != MarketType {
-		return nil, fmt.Errorf("binance: market type %s is not served", core.MarketTypeName(mt))
+func (adapter *Adapter) FetchMetadata(ctx context.Context, marketType manoochv1.MarketType) ([]*manoochv1.InstrumentMeta, error) {
+	if marketType != MarketType {
+		return nil, fmt.Errorf("binance: market type %s is not served", core.MarketTypeName(marketType))
 	}
-	if a.opts.RESTEndpoint == "" {
+	if adapter.options.RESTEndpoint == "" {
 		return nil, fmt.Errorf("binance: no rest endpoint")
 	}
-	if err := a.opts.Limiter.Allow(ctx, Venue, ratelimit.LimitRESTWeight, a.RESTCost(core.OpFetchMetadata)); err != nil {
+	if err := adapter.options.Limiter.Allow(ctx, Venue, ratelimit.LimitRESTWeight, adapter.RESTCost(core.OpFetchMetadata)); err != nil {
 		return nil, fmt.Errorf("binance: fetch metadata: %w", err)
 	}
 
-	body, recvNs, err := a.get(ctx, a.opts.RESTEndpoint+exchangeInfoPath,
-		maxMetadataBodyBytes, pb.Channel_CHANNEL_METADATA, "")
+	body, receivedNs, err := adapter.get(ctx, adapter.options.RESTEndpoint+exchangeInfoPath,
+		maxMetadataBodyBytes, manoochv1.Channel_CHANNEL_METADATA, "")
 	if err != nil {
 		return nil, fmt.Errorf("binance: fetch metadata: %w", err)
 	}
 
-	var info exchangeInfo
-	if err := json.Unmarshal(body, &info); err != nil {
-		return nil, core.NewParseError(core.KindJSON, pb.Channel_CHANNEL_METADATA, "", err, "exchangeInfo is not json")
+	var exchangeInfo exchangeInfo
+	if err := json.Unmarshal(body, &exchangeInfo); err != nil {
+		return nil, core.NewParseError(core.KindJSON, manoochv1.Channel_CHANNEL_METADATA, "", err, "exchangeInfo is not json")
 	}
-	if info.ServerTimeMS <= 0 {
-		return nil, core.NewParseError(core.KindField, pb.Channel_CHANNEL_METADATA, "", nil,
-			"serverTime is %d", info.ServerTimeMS)
+	if exchangeInfo.ServerTimeMS <= 0 {
+		return nil, core.NewParseError(core.KindField, manoochv1.Channel_CHANNEL_METADATA, "", nil,
+			"serverTime is %d", exchangeInfo.ServerTimeMS)
 	}
-	exchangeNs := msToNs(info.ServerTimeMS)
+	exchangeNs := millisecondsToNanoseconds(exchangeInfo.ServerTimeMS)
 
-	out := make([]*pb.InstrumentMeta, 0, len(info.Symbols))
-	for _, sym := range info.Symbols {
-		if sym.ContractType != contractTypePerpetual {
+	out := make([]*manoochv1.InstrumentMeta, 0, len(exchangeInfo.Symbols))
+	for _, symbol := range exchangeInfo.Symbols {
+		if symbol.ContractType != contractTypePerpetual {
 			continue
 		}
-		ref, err := a.ParseVenueSymbol(sym.Symbol, mt)
+		reference, err := adapter.ParseVenueSymbol(symbol.Symbol, marketType)
 		if err != nil {
 			continue // a quote asset we have no mapping for
 		}
-		meta, err := a.instrumentMeta(ref, sym, exchangeNs, recvNs)
+		metadata, err := adapter.instrumentMetadata(reference, symbol, exchangeNs, receivedNs)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, meta)
+		out = append(out, metadata)
 	}
 	if len(out) == 0 {
-		return nil, core.NewParseError(core.KindField, pb.Channel_CHANNEL_METADATA, "", nil,
+		return nil, core.NewParseError(core.KindField, manoochv1.Channel_CHANNEL_METADATA, "", nil,
 			"exchangeInfo listed no %s contracts", contractTypePerpetual)
 	}
 	return out, nil
 }
 
-// instrumentMeta converts one symbol's filters into the normalized message.
-func (a *Adapter) instrumentMeta(ref core.InstrumentRef, sym exchangeSymbol, exchangeNs, recvNs int64) (*pb.InstrumentMeta, error) {
-	meta := &pb.InstrumentMeta{
-		Env: &pb.Envelope{
+// instrumentMetadata converts one symbol's filters into the normalized message.
+func (adapter *Adapter) instrumentMetadata(reference core.InstrumentRef, symbol exchangeSymbol, exchangeNs, receivedNs int64) (*manoochv1.InstrumentMeta, error) {
+	metadata := &manoochv1.InstrumentMeta{
+		Env: &manoochv1.Envelope{
 			Venue:          Venue,
-			Instrument:     ref.Proto(sym.Symbol),
-			Channel:        pb.Channel_CHANNEL_METADATA,
+			Instrument:     reference.Proto(symbol.Symbol),
+			Channel:        manoochv1.Channel_CHANNEL_METADATA,
 			ExchangeTimeNs: exchangeNs,
-			RecvTimeNs:     recvNs,
+			RecvTimeNs:     receivedNs,
 			// serverTime is the venue's clock at the moment it answered, so it
 			// is a send time like every other timestamp Binance gives us.
 			// Leaving this false would tell a consumer the opposite and drop
 			// the message out of the publish-latency histogram.
 			ExchangeTimeIsSendTime: true,
-			Source:                 pb.Source_SOURCE_REST,
-			Status:                 pb.Status_STATUS_HEALTHY,
+			Source:                 manoochv1.Source_SOURCE_REST,
+			Status:                 manoochv1.Status_STATUS_HEALTHY,
 		},
 		ContractMultiplier: linearContractMultiplier,
-		Active:             sym.Status == statusTrading,
-		LastRefreshNs:      recvNs,
+		Active:             symbol.Status == statusTrading,
+		LastRefreshNs:      receivedNs,
 	}
 
-	for _, f := range sym.Filters {
+	for _, filter := range symbol.Filters {
 		var err error
-		switch f.Type {
+		switch filter.Type {
 		case filterPrice:
-			meta.TickSize, err = parseMetaPrice(sym.Symbol, "tickSize", f.TickSize)
+			metadata.TickSize, err = parseMetadataPrice(symbol.Symbol, "tickSize", filter.TickSize)
 		case filterLotSize:
-			err = fillLotSize(meta, sym.Symbol, f)
+			err = fillLotSize(metadata, symbol.Symbol, filter)
 		case filterMinNotional:
-			meta.MinNotional, err = parseMetaPrice(sym.Symbol, "notional", f.Notional)
+			metadata.MinNotional, err = parseMetadataPrice(symbol.Symbol, "notional", filter.Notional)
 		}
 		if err != nil {
 			return nil, err
 		}
 	}
-	if meta.TickSize <= 0 || meta.LotSize <= 0 {
+	if metadata.TickSize <= 0 || metadata.LotSize <= 0 {
 		// Precision a consumer cannot round an order to is not metadata.
-		return nil, core.NewParseError(core.KindField, pb.Channel_CHANNEL_METADATA, sym.Symbol, nil,
-			"tick_size %d lot_size %d", meta.TickSize, meta.LotSize)
+		return nil, core.NewParseError(core.KindField, manoochv1.Channel_CHANNEL_METADATA, symbol.Symbol, nil,
+			"tick_size %d lot_size %d", metadata.TickSize, metadata.LotSize)
 	}
-	return meta, nil
+	return metadata, nil
 }
 
 // fillLotSize fills the three size fields the LOT_SIZE filter carries. Each is
 // checked on its own: a filter that half-parses would otherwise leave a
 // plausible zero where a minimum order size belongs.
-func fillLotSize(meta *pb.InstrumentMeta, symbol string, f exchangeFilter) error {
-	for _, fl := range []struct {
-		dst   *int64
-		name  string
-		value string
+func fillLotSize(metadata *manoochv1.InstrumentMeta, symbol string, filter exchangeFilter) error {
+	for _, field := range []struct {
+		destination *int64
+		name        string
+		value       string
 	}{
-		{&meta.LotSize, "stepSize", f.StepSize},
-		{&meta.MinSize, "minQty", f.MinQty},
-		{&meta.MaxSize, "maxQty", f.MaxQty},
+		{&metadata.LotSize, "stepSize", filter.StepSize},
+		{&metadata.MinSize, "minQty", filter.MinQty},
+		{&metadata.MaxSize, "maxQty", filter.MaxQty},
 	} {
-		v, err := parseMetaSize(symbol, fl.name, fl.value)
+		v, err := parseMetadataSize(symbol, field.name, field.value)
 		if err != nil {
 			return err
 		}
-		*fl.dst = v
+		*field.destination = v
 	}
 	return nil
 }
 
-// parseMetaPrice and parseMetaSize hand the venue's digit string straight to
-// pkg/price. An empty value is zero rather than an error: not every symbol
-// carries every filter, and a filter that is absent is missing data, not a
-// malformed number.
-func parseMetaPrice(symbol, field, value string) (int64, error) {
+// parseMetadataPrice and parseMetadataSize hand the venue's digit string
+// straight to pkg/price. An empty value is zero rather than an error: not every
+// symbol carries every filter, and a filter that is absent is missing data, not
+// a malformed number.
+func parseMetadataPrice(symbol, field, value string) (int64, error) {
 	if value == "" {
 		return 0, nil
 	}
 	v, err := price.ParsePrice(value)
 	if err != nil {
-		return 0, numericError(pb.Channel_CHANNEL_METADATA, symbol, field, value, err)
+		return 0, numericError(manoochv1.Channel_CHANNEL_METADATA, symbol, field, value, err)
 	}
 	return int64(v), nil
 }
 
-func parseMetaSize(symbol, field, value string) (int64, error) {
+func parseMetadataSize(symbol, field, value string) (int64, error) {
 	if value == "" {
 		return 0, nil
 	}
 	v, err := price.ParseSize(value)
 	if err != nil {
-		return 0, numericError(pb.Channel_CHANNEL_METADATA, symbol, field, value, err)
+		return 0, numericError(manoochv1.Channel_CHANNEL_METADATA, symbol, field, value, err)
 	}
 	return int64(v), nil
 }

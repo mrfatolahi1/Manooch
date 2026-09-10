@@ -6,7 +6,7 @@ habits are allowed to exist. Everything downstream of `Parse` is venue-agnostic.
 | File | Holds |
 |---|---|
 | `internal/core/adapter.go` | The `Adapter` interface and its types |
-| `internal/adapter/adapter.go` | `New`, `Specs`, `Venues`, `Deps` — venue name to implementation |
+| `internal/adapter/adapter.go` | `New`, `Specifications`, `Venues`, `Dependencies` — venue name to implementation |
 | `internal/adapter/binance/` | See [`adapter-binance.md`](adapter-binance.md) |
 | `internal/adapter/kucoin/` | See [`adapter-kucoin.md`](adapter-kucoin.md) |
 | `internal/adapter/adaptertest/` | The conformance suite every adapter must pass |
@@ -25,14 +25,14 @@ habits are allowed to exist. Everything downstream of `Parse` is venue-agnostic.
 | `core.Operation`, `core.RESTCost` | The venue's own weight for a call the caller decides to make, which is what the limiter budgets against |
 | `core.ErrNotImplemented` | What a venue that cannot serve a method returns; a distinct error so "cannot" is not read as "failed" |
 | `adapter.New(cfg, deps)` | Builds the configured venue's adapter, or names the venue it cannot serve |
-| `adapter.Deps` | The process-level collaborators a venue package is handed; today, the rate limiter |
-| `adapter.Specs(cfg)` | Expands `config.Stream` into `[]core.StreamSpec` |
+| `adapter.Dependencies` | The process-level collaborators a venue package is handed; today, the rate limiter |
+| `adapter.Specifications(configuration)` | Expands `config.Stream` into `[]core.StreamSpec` |
 | `adaptertest.RunAdapterConformance` | Drives a fixture directory and asserts the normalized output |
 | `adaptertest.RunAdapterDeterminism` | Parses each fixture 1000 times, asserting identical protobuf |
 
 ## How it is used
 
-`cmd/manooch-feed` calls `adapter.New` → `adapter.Specs` → `PlanSubscriptions`
+`cmd/manooch-feed` calls `adapter.New` → `adapter.Specifications` → `PlanSubscriptions`
 before it dials Redis or binds a port, then hands the plans to
 `internal/supervisor`, which owns `Dial`, `Read` and `Parse`.
 `internal/fallback` calls `FetchOnce` on every expired key, and
@@ -48,7 +48,7 @@ on a healthy socket.
 - **Adapters hold no stream lifecycle state.** No reconnect counters, no
   last-seen timestamps, no goroutines. `internal/supervisor` owns all of it,
   which is what let supervision be added in M2 without touching a venue package.
-- **`Parse` is pure and deterministic given `(frame, recvNs)`.** No clock read,
+- **`Parse` is pure and deterministic given `(frame, receivedNs)`.** No clock read,
   no map iteration, no counter. Fixture replay tests nothing otherwise, and a
   message that differs between identical frames cannot be reasoned about.
 - **Adapters never touch Redis, metrics or the config loader.** They are handed

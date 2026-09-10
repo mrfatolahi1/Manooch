@@ -21,7 +21,7 @@ does not, and says how long to wait before trying again.
 | `Dial(ctx, Options) (core.Conn, error)` | Opens a socket, bounded by `ctx` alone |
 | `Options` | `URL`, `ReadTimeout`, `MaxFrameBytes`, `HTTPClient`, `HTTPHeader` |
 | `Dialer` | `func(ctx, Options) (core.Conn, error)`; adapters take one so a test can substitute |
-| `Conn.Read(ctx)` | Blocks for one frame, returns it with `recvNs` |
+| `Conn.Read(ctx)` | Blocks for one frame, returns it with `receivedNs` |
 | `Conn.Write(ctx, b)` | One text frame, for subscribe messages and client-initiated pings |
 | `Options.HTTPClient` | Performs the handshake; its `Timeout` becomes the handshake deadline, and the library clones it away so the live connection is unbounded |
 | `Conn.Close()` | Safe from another goroutine, and unblocks `Read` |
@@ -44,7 +44,7 @@ error is even checked:
 
 ```go
 _, b, err := c.ws.Read(readCtx)
-recvNs := time.Now().UnixNano()
+receivedNs := time.Now().UnixNano()
 ```
 
 Every freshness number and the clock-skew gauge are measured from that line.
@@ -93,7 +93,7 @@ and nobody discovers the disconnect by not being sent data. The timer lives in
 
 | Situation | Result |
 |---|---|
-| Frame arrives | `(frame, recvNs, nil)` |
+| Frame arrives | `(frame, receivedNs, nil)` |
 | Silent past `ReadTimeout` | `ErrIdle` |
 | Caller cancelled its context | `ctx.Err()`, never `ErrIdle` |
 | Frame over `MaxFrameBytes` | `ErrFrameTooBig`, connection failed |
@@ -101,7 +101,7 @@ and nobody discovers the disconnect by not being sent data. The timer lives in
 
 ## Rules
 
-- **Stamp `recvNs` in the read loop, never later.** It is the basis of every
+- **Stamp `receivedNs` in the read loop, never later.** It is the basis of every
   freshness and clock-skew calculation downstream.
 - **Enforce the read deadline.** TCP holds a half-open connection open forever;
   a socket that is connected and silent is a disconnect, and a stream that never

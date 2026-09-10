@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	pb "github.com/you/manooch/gen/manoochv1"
+	"github.com/you/manooch/gen/manoochv1"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -24,15 +24,15 @@ type Adapter interface {
 
 	// VenueSymbol maps canonical identity to the venue's native string:
 	// BTC_USDT + PERP_LINEAR is "BTCUSDT" on Binance, "XBTUSDTM" on KuCoin.
-	VenueSymbol(ref InstrumentRef) (string, error)
+	VenueSymbol(reference InstrumentRef) (string, error)
 
 	// ParseVenueSymbol is the inverse, used when reading REST responses that
 	// echo the venue's own symbol.
-	ParseVenueSymbol(s string, mt pb.MarketType) (InstrumentRef, error)
+	ParseVenueSymbol(s string, marketType manoochv1.MarketType) (InstrumentRef, error)
 
 	// PlanSubscriptions groups requested streams onto sockets, respecting the
 	// venue's limit on streams per connection.
-	PlanSubscriptions(specs []StreamSpec) ([]SocketPlan, error)
+	PlanSubscriptions(specifications []StreamSpec) ([]SocketPlan, error)
 
 	// Dial opens one websocket for one plan and completes the subscription
 	// handshake. It returns only once the subscriptions are acknowledged, or
@@ -40,16 +40,16 @@ type Adapter interface {
 	Dial(ctx context.Context, plan SocketPlan) (Conn, error)
 
 	// Parse converts one raw frame into zero or more normalized messages.
-	// recvNs was stamped in the read loop before this call.
+	// receivedNs was stamped in the read loop before this call.
 	//
 	// Returning (nil, nil) is valid: pongs, acks and heartbeats carry no data.
-	Parse(frame []byte, recvNs int64) ([]Message, error)
+	Parse(frame []byte, receivedNs int64) ([]Message, error)
 
 	// FetchOnce is the REST fallback for a single stream.
-	FetchOnce(ctx context.Context, spec StreamSpec) ([]Message, error)
+	FetchOnce(ctx context.Context, specification StreamSpec) ([]Message, error)
 
 	// FetchMetadata reads the venue's public instrument endpoint.
-	FetchMetadata(ctx context.Context, mt pb.MarketType) ([]*pb.InstrumentMeta, error)
+	FetchMetadata(ctx context.Context, marketType manoochv1.MarketType) ([]*manoochv1.InstrumentMeta, error)
 
 	// RESTCost returns the venue's own weight for an operation, which is what
 	// a rate limiter has to budget against.
@@ -72,8 +72,8 @@ const (
 )
 
 // String renders the operation for logs and metric labels.
-func (o Operation) String() string {
-	switch o {
+func (operation Operation) String() string {
+	switch operation {
 	case OpFetchOnce:
 		return "fetch_once"
 	case OpFetchMetadata:
@@ -87,12 +87,12 @@ func (o Operation) String() string {
 // the unit everything upstream of the publisher is scheduled in.
 type StreamSpec struct {
 	Instrument InstrumentRef
-	Channel    pb.Channel
+	Channel    manoochv1.Channel
 }
 
-// String renders the spec for logs: "BTC_USDT:PERP_LINEAR mark_price".
-func (s StreamSpec) String() string {
-	return s.Instrument.String() + " " + ChannelName(s.Channel)
+// String renders the specification for logs: "BTC_USDT:PERP_LINEAR mark_price".
+func (specification StreamSpec) String() string {
+	return specification.Instrument.String() + " " + ChannelName(specification.Channel)
 }
 
 // A SocketPlan is the set of streams one websocket will carry. The adapter
@@ -101,8 +101,8 @@ func (s StreamSpec) String() string {
 type SocketPlan struct {
 	// ID is stable across runs for the same config, so a log line or a
 	// reconnect metric points at the same socket between restarts.
-	ID    string
-	Specs []StreamSpec
+	ID             string
+	Specifications []StreamSpec
 }
 
 // A Message is one normalized payload ready to publish. The adapter fills
@@ -113,9 +113,9 @@ type Message struct {
 	// Proto is the payload: MarkPrice, IndexPrice, Funding, InstrumentMeta.
 	Proto proto.Message
 	// TTL is 0 for a key that never expires.
-	TTL     time.Duration
-	Channel pb.Channel
-	Spec    StreamSpec
+	TimeToLive    time.Duration
+	Channel       manoochv1.Channel
+	Specification StreamSpec
 }
 
 // A Conn is one open websocket. transport implements it; adapters return it
@@ -123,7 +123,7 @@ type Message struct {
 type Conn interface {
 	// Read blocks for the next frame and returns it with the wall-clock
 	// nanoseconds at which it arrived.
-	Read(ctx context.Context) (frame []byte, recvNs int64, err error)
+	Read(ctx context.Context) (frame []byte, receivedNs int64, err error)
 
 	// Write sends one frame, for venues that need client-initiated pings.
 	Write(ctx context.Context, b []byte) error
@@ -157,32 +157,32 @@ const (
 // as if it were whole is the silent wrongness this service exists to prevent.
 type ParseError struct {
 	Kind    string
-	Channel pb.Channel
+	Channel manoochv1.Channel
 	Symbol  string // venue symbol, when the frame names one
-	Msg     string
-	Err     error
+	Message string
+	Cause   error
 }
 
 // Error renders the failure with its kind and, where known, its symbol.
-func (e *ParseError) Error() string {
-	s := "parse " + e.Kind
-	if e.Symbol != "" {
-		s += " " + e.Symbol
+func (parseError *ParseError) Error() string {
+	s := "parse " + parseError.Kind
+	if parseError.Symbol != "" {
+		s += " " + parseError.Symbol
 	}
-	if e.Msg != "" {
-		s += ": " + e.Msg
+	if parseError.Message != "" {
+		s += ": " + parseError.Message
 	}
-	if e.Err != nil {
-		s += ": " + e.Err.Error()
+	if parseError.Cause != nil {
+		s += ": " + parseError.Cause.Error()
 	}
 	return s
 }
 
 // Unwrap exposes the underlying failure to errors.Is.
-func (e *ParseError) Unwrap() error { return e.Err }
+func (parseError *ParseError) Unwrap() error { return parseError.Cause }
 
 // NewParseError builds a ParseError. The variadic form keeps call sites at one
 // line on a path that has a lot of them.
-func NewParseError(kind string, ch pb.Channel, symbol string, err error, format string, args ...any) *ParseError {
-	return &ParseError{Kind: kind, Channel: ch, Symbol: symbol, Msg: fmt.Sprintf(format, args...), Err: err}
+func NewParseError(kind string, channel manoochv1.Channel, symbol string, err error, format string, arguments ...any) *ParseError {
+	return &ParseError{Kind: kind, Channel: channel, Symbol: symbol, Message: fmt.Sprintf(format, arguments...), Cause: err}
 }

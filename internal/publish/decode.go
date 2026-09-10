@@ -3,7 +3,7 @@ package publish
 import (
 	"fmt"
 
-	pb "github.com/you/manooch/gen/manoochv1"
+	"github.com/you/manooch/gen/manoochv1"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -13,37 +13,37 @@ import (
 // the only thing that says what the bytes are. It exists for manooch-tap and
 // manooch-status, which are handed arbitrary keys by Redis; a data consumer
 // subscribes to channels it chose and knows the type already.
-func NewMessage(ch pb.Channel) (proto.Message, error) {
-	switch ch {
-	case pb.Channel_CHANNEL_MARK_PRICE:
-		return &pb.MarkPrice{}, nil
-	case pb.Channel_CHANNEL_INDEX_PRICE:
-		return &pb.IndexPrice{}, nil
-	case pb.Channel_CHANNEL_FUNDING:
-		return &pb.Funding{}, nil
-	case pb.Channel_CHANNEL_METADATA:
-		return &pb.InstrumentMeta{}, nil
-	case pb.Channel_CHANNEL_HEALTH:
-		return &pb.Health{}, nil
-	case pb.Channel_CHANNEL_RATELIMIT:
-		return &pb.RateLimit{}, nil
+func NewMessage(channel manoochv1.Channel) (proto.Message, error) {
+	switch channel {
+	case manoochv1.Channel_CHANNEL_MARK_PRICE:
+		return &manoochv1.MarkPrice{}, nil
+	case manoochv1.Channel_CHANNEL_INDEX_PRICE:
+		return &manoochv1.IndexPrice{}, nil
+	case manoochv1.Channel_CHANNEL_FUNDING:
+		return &manoochv1.Funding{}, nil
+	case manoochv1.Channel_CHANNEL_METADATA:
+		return &manoochv1.InstrumentMeta{}, nil
+	case manoochv1.Channel_CHANNEL_HEALTH:
+		return &manoochv1.Health{}, nil
+	case manoochv1.Channel_CHANNEL_RATELIMIT:
+		return &manoochv1.RateLimit{}, nil
 	default:
-		return nil, fmt.Errorf("no message type for channel %v", ch)
+		return nil, fmt.Errorf("no message type for channel %v", channel)
 	}
 }
 
 // Decode unmarshals a payload and returns it along with its envelope.
-func Decode(ch pb.Channel, b []byte) (proto.Message, *pb.Envelope, error) {
-	msg, err := NewMessage(ch)
+func Decode(channel manoochv1.Channel, b []byte) (proto.Message, *manoochv1.Envelope, error) {
+	message, err := NewMessage(channel)
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := proto.Unmarshal(b, msg); err != nil {
-		return nil, nil, fmt.Errorf("unmarshal %v: %w", ch, err)
+	if err := proto.Unmarshal(b, message); err != nil {
+		return nil, nil, fmt.Errorf("unmarshal %v: %w", channel, err)
 	}
-	env := msg.(enveloped).GetEnv()
-	if env == nil {
-		return nil, nil, fmt.Errorf("%v message has no envelope", ch)
+	envelope := message.(enveloped).GetEnv()
+	if envelope == nil {
+		return nil, nil, fmt.Errorf("%v message has no envelope", channel)
 	}
-	return msg, env, nil
+	return message, envelope, nil
 }

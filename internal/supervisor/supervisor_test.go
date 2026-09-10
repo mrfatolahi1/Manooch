@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/you/manooch/gen/manoochv1"
+	"github.com/you/manooch/gen/manoochv1"
 	"github.com/you/manooch/internal/core"
 	"github.com/you/manooch/internal/core/coretest"
 	"github.com/you/manooch/internal/health"
-	"github.com/you/manooch/internal/obs"
+	"github.com/you/manooch/internal/observability"
 	"github.com/you/manooch/internal/publish"
 	"github.com/you/manooch/internal/supervisor"
 	"github.com/you/manooch/internal/transport"
@@ -27,38 +27,38 @@ const (
 
 // recorder counts publishes per key.
 type recorder struct {
-	mu     sync.Mutex
+	mutex  sync.Mutex
 	counts map[string]int
-	last   map[string]*pb.Envelope
+	last   map[string]*manoochv1.Envelope
 	err    error
 }
 
 func newRecorder() *recorder {
-	return &recorder{counts: map[string]int{}, last: map[string]*pb.Envelope{}}
+	return &recorder{counts: map[string]int{}, last: map[string]*manoochv1.Envelope{}}
 }
 
-func (r *recorder) Publish(_ context.Context, key string, msg proto.Message, _ time.Duration) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.counts[key]++
-	if e, ok := msg.(interface{ GetEnv() *pb.Envelope }); ok {
-		r.last[key] = proto.Clone(e.GetEnv()).(*pb.Envelope)
+func (recorder *recorder) Publish(_ context.Context, key string, message proto.Message, _ time.Duration) error {
+	recorder.mutex.Lock()
+	defer recorder.mutex.Unlock()
+	recorder.counts[key]++
+	if enveloped, ok := message.(interface{ GetEnv() *manoochv1.Envelope }); ok {
+		recorder.last[key] = proto.Clone(enveloped.GetEnv()).(*manoochv1.Envelope)
 	}
-	return r.err
+	return recorder.err
 }
 
-func (r *recorder) Close() error { return nil }
+func (recorder *recorder) Close() error { return nil }
 
-func (r *recorder) count(key string) int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.counts[key]
+func (recorder *recorder) count(key string) int {
+	recorder.mutex.Lock()
+	defer recorder.mutex.Unlock()
+	return recorder.counts[key]
 }
 
-func (r *recorder) envelope(key string) *pb.Envelope {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.last[key]
+func (recorder *recorder) envelope(key string) *manoochv1.Envelope {
+	recorder.mutex.Lock()
+	defer recorder.mutex.Unlock()
+	return recorder.last[key]
 }
 
 func quiet() *slog.Logger {
@@ -86,14 +86,14 @@ func eventually(t *testing.T, what string, cond func() bool) {
 // ---------- harness ----------
 
 type harness struct {
-	adapter *coretest.Adapter
-	pub     *recorder
-	tracker *health.Tracker
-	proc    *supervisor.Process
-	specs   []core.StreamSpec
-	metrics *obs.Metrics
+	adapter        *coretest.Adapter
+	recorder       *recorder
+	tracker        *health.Tracker
+	process        *supervisor.Process
+	specifications []core.StreamSpec
+	metrics        *observability.Metrics
 
-	mu    sync.Mutex
+	mutex sync.Mutex
 	conns []*coretest.Conn
 	dial  func() (core.Conn, error)
 }
@@ -104,27 +104,27 @@ func newHarness(t *testing.T, symbols ...string) *harness {
 		symbols = []string{"BTC_USDT"}
 	}
 
-	specs, err := coretest.Specs(symbols...)
+	specifications, err := coretest.Specifications(symbols...)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	h := &harness{pub: newRecorder(), specs: specs, metrics: obs.NewMetrics()}
-	h.adapter = &coretest.Adapter{}
-	h.adapter.DialFunc = func(context.Context, core.SocketPlan) (core.Conn, error) {
-		h.mu.Lock()
-		dial := h.dial
-		h.mu.Unlock()
+	harness := &harness{recorder: newRecorder(), specifications: specifications, metrics: observability.NewMetrics()}
+	harness.adapter = &coretest.Adapter{}
+	harness.adapter.DialFunc = func(context.Context, core.SocketPlan) (core.Conn, error) {
+		harness.mutex.Lock()
+		dial := harness.dial
+		harness.mutex.Unlock()
 		if dial != nil {
 			return dial()
 		}
-		return h.newConn(), nil
+		return harness.newConn(), nil
 	}
 
-	h.tracker, err = health.New(health.Options{
+	harness.tracker, err = health.New(health.Options{
 		Venue:               coretest.Venue,
-		Publisher:           h.pub,
-		Metrics:             h.metrics,
+		Publisher:           harness.recorder,
+		Metrics:             harness.metrics,
 		Log:                 quiet(),
 		HeartbeatInterval:   time.Second,
 		ClockSkewDegradedMS: 2000,
@@ -135,24 +135,24 @@ func newHarness(t *testing.T, symbols ...string) *harness {
 		t.Fatal(err)
 	}
 
-	plans, err := h.adapter.PlanSubscriptions(specs)
+	plans, err := harness.adapter.PlanSubscriptions(specifications)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, plan := range plans {
-		for _, spec := range plan.Specs {
-			sym, _ := h.adapter.VenueSymbol(spec.Instrument)
-			h.tracker.Register(spec, sym, plan.ID)
+		for _, specification := range plan.Specifications {
+			symbol, _ := harness.adapter.VenueSymbol(specification.Instrument)
+			harness.tracker.Register(specification, symbol, plan.ID)
 		}
 	}
 
-	h.proc, err = supervisor.New(supervisor.Options{
+	harness.process, err = supervisor.New(supervisor.Options{
 		Venue:         coretest.Venue,
-		Adapter:       h.adapter,
+		Adapter:       harness.adapter,
 		Plans:         plans,
-		Publisher:     h.pub,
-		Health:        h.tracker,
-		Metrics:       h.metrics,
+		Publisher:     harness.recorder,
+		Health:        harness.tracker,
+		Metrics:       harness.metrics,
 		Log:           quiet(),
 		StreamBackoff: fastBackoff(),
 		SocketBackoff: fastBackoff(),
@@ -168,24 +168,24 @@ func newHarness(t *testing.T, symbols ...string) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return h
+	return harness
 }
 
 // withMaxAge rebuilds the process with a connection age limit, which is only
 // settable at construction.
-func (h *harness) withMaxAge(t *testing.T, d time.Duration) {
+func (harness *harness) withMaxAge(t *testing.T, duration time.Duration) {
 	t.Helper()
-	plans, err := h.adapter.PlanSubscriptions(h.specs)
+	plans, err := harness.adapter.PlanSubscriptions(harness.specifications)
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.proc, err = supervisor.New(supervisor.Options{
+	harness.process, err = supervisor.New(supervisor.Options{
 		Venue:         coretest.Venue,
-		Adapter:       h.adapter,
+		Adapter:       harness.adapter,
 		Plans:         plans,
-		Publisher:     h.pub,
-		Health:        h.tracker,
-		Metrics:       h.metrics,
+		Publisher:     harness.recorder,
+		Health:        harness.tracker,
+		Metrics:       harness.metrics,
 		Log:           quiet(),
 		StreamBackoff: fastBackoff(),
 		SocketBackoff: fastBackoff(),
@@ -197,39 +197,39 @@ func (h *harness) withMaxAge(t *testing.T, d time.Duration) {
 		// after a publish has already proved the socket up, so it is set out of
 		// the way rather than waited through.
 		ConnectGrace: time.Millisecond,
-		ConnMaxAge:   d,
+		ConnMaxAge:   duration,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 }
 
-func (h *harness) newConn() *coretest.Conn {
-	c := coretest.NewConn()
-	h.mu.Lock()
-	h.conns = append(h.conns, c)
-	h.mu.Unlock()
-	return c
+func (harness *harness) newConn() *coretest.Conn {
+	connection := coretest.NewConn()
+	harness.mutex.Lock()
+	harness.conns = append(harness.conns, connection)
+	harness.mutex.Unlock()
+	return connection
 }
 
-// conn returns the nth connection handed out, waiting for it to exist.
-func (h *harness) conn(t *testing.T, n int) *coretest.Conn {
+// connection returns the nth connection handed out, waiting for it to exist.
+func (harness *harness) connection(t *testing.T, n int) *coretest.Conn {
 	t.Helper()
 	eventually(t, "connection %d", func() bool {
-		h.mu.Lock()
-		defer h.mu.Unlock()
-		return len(h.conns) > n
+		harness.mutex.Lock()
+		defer harness.mutex.Unlock()
+		return len(harness.conns) > n
 	})
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.conns[n]
+	harness.mutex.Lock()
+	defer harness.mutex.Unlock()
+	return harness.conns[n]
 }
 
-func (h *harness) run(t *testing.T) context.CancelFunc {
+func (harness *harness) run(t *testing.T) context.CancelFunc {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { defer close(done); h.proc.Run(ctx) }()
+	go func() { defer close(done); harness.process.Run(ctx) }()
 	stopped := func() {
 		cancel()
 		select {
@@ -242,8 +242,8 @@ func (h *harness) run(t *testing.T) context.CancelFunc {
 	return cancel
 }
 
-func key(symbol string, ch pb.Channel) string {
-	return publish.Key(coretest.Venue, coretest.MarketType, symbol, ch)
+func key(symbol string, channel manoochv1.Channel) string {
+	return publish.Key(coretest.Venue, coretest.MarketType, symbol, channel)
 }
 
 // ---------- tests ----------
@@ -251,15 +251,15 @@ func key(symbol string, ch pb.Channel) string {
 // TestPublishesWhatComesOffTheSocket is the baseline the failure cases move
 // away from: one frame becomes one message per channel, each on its own key.
 func TestPublishesWhatComesOffTheSocket(t *testing.T) {
-	h := newHarness(t)
-	h.run(t)
+	harness := newHarness(t)
+	harness.run(t)
 
-	h.conn(t, 0).Push([]byte("BTC_USDT"))
+	harness.connection(t, 0).Push([]byte("BTC_USDT"))
 
-	for _, ch := range []pb.Channel{pb.Channel_CHANNEL_MARK_PRICE, pb.Channel_CHANNEL_INDEX_PRICE, pb.Channel_CHANNEL_FUNDING} {
-		k := key("BTC_USDT", ch)
-		eventually(t, k, func() bool { return h.pub.count(k) > 0 })
-		if got := h.pub.envelope(k).Status; got != pb.Status_STATUS_HEALTHY {
+	for _, channel := range []manoochv1.Channel{manoochv1.Channel_CHANNEL_MARK_PRICE, manoochv1.Channel_CHANNEL_INDEX_PRICE, manoochv1.Channel_CHANNEL_FUNDING} {
+		k := key("BTC_USDT", channel)
+		eventually(t, k, func() bool { return harness.recorder.count(k) > 0 })
+		if got := harness.recorder.envelope(k).Status; got != manoochv1.Status_STATUS_HEALTHY {
 			t.Errorf("%s status = %s, want HEALTHY", k, core.StatusName(got))
 		}
 	}
@@ -268,72 +268,72 @@ func TestPublishesWhatComesOffTheSocket(t *testing.T) {
 // TestSocketReconnectsAfterReadError: M1 exited the process here. Everything
 // this phase is for starts with not doing that.
 func TestSocketReconnectsAfterReadError(t *testing.T) {
-	h := newHarness(t)
-	h.run(t)
+	harness := newHarness(t)
+	harness.run(t)
 
-	first := h.conn(t, 0)
+	first := harness.connection(t, 0)
 	first.Push([]byte("BTC_USDT"))
-	k := key("BTC_USDT", pb.Channel_CHANNEL_MARK_PRICE)
-	eventually(t, "first publish", func() bool { return h.pub.count(k) > 0 })
+	k := key("BTC_USDT", manoochv1.Channel_CHANNEL_MARK_PRICE)
+	eventually(t, "first publish", func() bool { return harness.recorder.count(k) > 0 })
 
 	first.PushError(errors.New("connection reset by peer"))
 
-	second := h.conn(t, 1)
-	before := h.pub.count(k)
+	second := harness.connection(t, 1)
+	before := harness.recorder.count(k)
 	second.Push([]byte("BTC_USDT"))
-	eventually(t, "publishing again after reconnect", func() bool { return h.pub.count(k) > before })
+	eventually(t, "publishing again after reconnect", func() bool { return harness.recorder.count(k) > before })
 }
 
 // TestIdleSocketIsADisconnect: TCP holds a half-open connection open forever,
 // so a socket that is connected and silent has to be treated as dead. The read
 // deadline is the only thing that notices.
 func TestIdleSocketIsADisconnect(t *testing.T) {
-	h := newHarness(t)
+	harness := newHarness(t)
 
 	first := true
-	h.mu.Lock()
-	h.dial = func() (core.Conn, error) {
-		c := h.newConn()
+	harness.mutex.Lock()
+	harness.dial = func() (core.Conn, error) {
+		connection := harness.newConn()
 		if first {
 			first = false
-			c.Silent(20*time.Millisecond, transport.ErrIdle)
+			connection.Silent(20*time.Millisecond, transport.ErrIdle)
 		}
-		return c, nil
+		return connection, nil
 	}
-	h.mu.Unlock()
-	h.run(t)
+	harness.mutex.Unlock()
+	harness.run(t)
 
 	// The second connection only exists because the first was given up on.
-	second := h.conn(t, 1)
+	second := harness.connection(t, 1)
 	second.Push([]byte("BTC_USDT"))
 
-	k := key("BTC_USDT", pb.Channel_CHANNEL_MARK_PRICE)
-	eventually(t, "publishing after the idle socket was replaced", func() bool { return h.pub.count(k) > 0 })
+	k := key("BTC_USDT", manoochv1.Channel_CHANNEL_MARK_PRICE)
+	eventually(t, "publishing after the idle socket was replaced", func() bool { return harness.recorder.count(k) > 0 })
 }
 
 // TestCircuitBreakerStopsDialling is the acceptance criterion: ten consecutive
 // failures, then no connection attempt at all while it is open.
 func TestCircuitBreakerStopsDialling(t *testing.T) {
-	h := newHarness(t)
-	h.mu.Lock()
-	h.dial = func() (core.Conn, error) { return nil, errors.New("connection refused") }
-	h.mu.Unlock()
-	h.run(t)
+	harness := newHarness(t)
+	harness.mutex.Lock()
+	harness.dial = func() (core.Conn, error) { return nil, errors.New("connection refused") }
+	harness.mutex.Unlock()
+	harness.run(t)
 
-	eventually(t, "the breaker to open", func() bool { return h.adapter.Dials() >= 10 })
+	eventually(t, "the breaker to open", func() bool { return harness.adapter.Dials() >= 10 })
 
 	// Whatever it reached when the breaker opened, it stops there. The open
 	// duration is an hour, so any further dial is a real violation.
-	settled := h.adapter.Dials()
+	settled := harness.adapter.Dials()
 	time.Sleep(200 * time.Millisecond)
-	if got := h.adapter.Dials(); got != settled {
+	if got := harness.adapter.Dials(); got != settled {
 		t.Errorf("%d dials while the circuit was open, want none", got-settled)
 	}
 
 	// And the streams say so rather than looking merely degraded.
-	st, reason := h.tracker.Status(h.specs[0])
-	if st != pb.Status_STATUS_STALE {
-		t.Errorf("status = %s (%q), want STALE", core.StatusName(st), reason)
+	status, reason := harness.tracker.Status(harness.specifications[0])
+	if status != manoochv1.Status_STATUS_STALE {
+		t.Errorf("status = %s (%q), want STALE", core.StatusName(status), reason)
 	}
 	if reason != "circuit open" {
 		t.Errorf("reason = %q, want %q", reason, "circuit open")
@@ -343,30 +343,30 @@ func TestCircuitBreakerStopsDialling(t *testing.T) {
 // TestOneStreamRestartLeavesTheOthersAlone: recovery is stream-level, so a
 // single expired key must not interrupt the streams beside it.
 func TestOneStreamRestartLeavesTheOthersAlone(t *testing.T) {
-	h := newHarness(t)
-	h.run(t)
+	harness := newHarness(t)
+	harness.run(t)
 
-	conn := h.conn(t, 0)
-	conn.Push([]byte("BTC_USDT"))
+	connection := harness.connection(t, 0)
+	connection.Push([]byte("BTC_USDT"))
 
-	mark := key("BTC_USDT", pb.Channel_CHANNEL_MARK_PRICE)
-	index := key("BTC_USDT", pb.Channel_CHANNEL_INDEX_PRICE)
-	eventually(t, "first publish", func() bool { return h.pub.count(mark) > 0 && h.pub.count(index) > 0 })
+	mark := key("BTC_USDT", manoochv1.Channel_CHANNEL_MARK_PRICE)
+	index := key("BTC_USDT", manoochv1.Channel_CHANNEL_INDEX_PRICE)
+	eventually(t, "first publish", func() bool { return harness.recorder.count(mark) > 0 && harness.recorder.count(index) > 0 })
 
-	h.proc.KeyExpired(h.specs[0]) // one key of six: tier 1
+	harness.process.KeyExpired(harness.specifications[0]) // one key of six: tier 1
 
 	// The socket is untouched: no redial, and the other streams keep going.
-	beforeIndex := h.pub.count(index)
-	conn.Push([]byte("BTC_USDT"))
-	eventually(t, "the other streams still publishing", func() bool { return h.pub.count(index) > beforeIndex })
+	beforeIndex := harness.recorder.count(index)
+	connection.Push([]byte("BTC_USDT"))
+	eventually(t, "the other streams still publishing", func() bool { return harness.recorder.count(index) > beforeIndex })
 
-	h.mu.Lock()
-	conns := len(h.conns)
-	h.mu.Unlock()
+	harness.mutex.Lock()
+	conns := len(harness.conns)
+	harness.mutex.Unlock()
 	if conns != 1 {
 		t.Errorf("%d connections opened; one expired key must not redial the socket", conns)
 	}
-	if conn.IsClosed() {
+	if connection.IsClosed() {
 		t.Error("the socket was closed for a single expired key")
 	}
 }
@@ -374,89 +374,89 @@ func TestOneStreamRestartLeavesTheOthersAlone(t *testing.T) {
 // TestQuorumOfExpiriesRedialsTheSocket: enough of one socket's keys expiring
 // together is the socket's failure, not the streams'.
 func TestQuorumOfExpiriesRedialsTheSocket(t *testing.T) {
-	h := newHarness(t)
-	h.run(t)
+	harness := newHarness(t)
+	harness.run(t)
 
-	first := h.conn(t, 0)
+	first := harness.connection(t, 0)
 	first.Push([]byte("BTC_USDT"))
-	mark := key("BTC_USDT", pb.Channel_CHANNEL_MARK_PRICE)
-	eventually(t, "first publish", func() bool { return h.pub.count(mark) > 0 })
+	mark := key("BTC_USDT", manoochv1.Channel_CHANNEL_MARK_PRICE)
+	eventually(t, "first publish", func() bool { return harness.recorder.count(mark) > 0 })
 
 	// Three of three streams on this socket.
-	for _, spec := range h.specs {
-		h.proc.KeyExpired(spec)
+	for _, specification := range harness.specifications {
+		harness.process.KeyExpired(specification)
 	}
 
 	eventually(t, "the socket to be closed", func() bool { return first.IsClosed() })
 
-	second := h.conn(t, 1)
-	before := h.pub.count(mark)
+	second := harness.connection(t, 1)
+	before := harness.recorder.count(mark)
 	second.Push([]byte("BTC_USDT"))
-	eventually(t, "the replacement socket to publish", func() bool { return h.pub.count(mark) > before })
+	eventually(t, "the replacement socket to publish", func() bool { return harness.recorder.count(mark) > before })
 }
 
 // TestWedgedSocketIsAbandonedAndCounted: Go cannot kill a goroutine. A read
 // that never returns can only be given up on, and the whole point of doing it
 // this way is that giving up is visible instead of silent.
 func TestWedgedSocketIsAbandonedAndCounted(t *testing.T) {
-	h := newHarness(t)
+	harness := newHarness(t)
 
 	wedged := true
-	h.mu.Lock()
-	h.dial = func() (core.Conn, error) {
-		c := h.newConn()
+	harness.mutex.Lock()
+	harness.dial = func() (core.Conn, error) {
+		connection := harness.newConn()
 		if wedged {
 			wedged = false
-			c.Wedge() // Close will not unblock its Read
+			connection.Wedge() // Close will not unblock its Read
 		}
-		return c, nil
+		return connection, nil
 	}
-	h.mu.Unlock()
-	h.run(t)
+	harness.mutex.Unlock()
+	harness.run(t)
 
-	first := h.conn(t, 0)
+	first := harness.connection(t, 0)
 	first.Push([]byte("BTC_USDT"))
-	mark := key("BTC_USDT", pb.Channel_CHANNEL_MARK_PRICE)
-	eventually(t, "first publish", func() bool { return h.pub.count(mark) > 0 })
+	mark := key("BTC_USDT", manoochv1.Channel_CHANNEL_MARK_PRICE)
+	eventually(t, "first publish", func() bool { return harness.recorder.count(mark) > 0 })
 
-	for _, spec := range h.specs {
-		h.proc.KeyExpired(spec)
+	for _, specification := range harness.specifications {
+		harness.process.KeyExpired(specification)
 	}
 
-	eventually(t, "the leak to be counted", func() bool { return h.proc.Leaked() > 0 })
+	eventually(t, "the leak to be counted", func() bool { return harness.process.Leaked() > 0 })
 
-	st, reason := h.tracker.VenueStatus()
-	if st != pb.Status_STATUS_DEGRADED {
-		t.Errorf("venue status = %s (%q), want DEGRADED", core.StatusName(st), reason)
+	status, reason := harness.tracker.VenueStatus()
+	if status != manoochv1.Status_STATUS_DEGRADED {
+		t.Errorf("venue status = %s (%q), want DEGRADED", core.StatusName(status), reason)
 	}
 
 	// And it carried on: a leaked goroutine is not a reason to stop serving.
-	second := h.conn(t, 1)
-	before := h.pub.count(mark)
+	second := harness.connection(t, 1)
+	before := harness.recorder.count(mark)
 	second.Push([]byte("BTC_USDT"))
-	eventually(t, "the replacement socket to publish", func() bool { return h.pub.count(mark) > before })
+	eventually(t, "the replacement socket to publish", func() bool { return harness.recorder.count(mark) > before })
 }
 
 // TestShutdownClosesTheConnection: cancelling a context does not free a
 // goroutine parked in Read, so the session has to close the socket underneath
 // it. Without this, every shutdown waits out the leak timeout.
 func TestShutdownClosesTheConnection(t *testing.T) {
-	h := newHarness(t)
-	cancel := h.run(t)
+	harness := newHarness(t)
+	cancel := harness.run(t)
 
-	conn := h.conn(t, 0)
-	conn.Push([]byte("BTC_USDT"))
-	eventually(t, "first publish", func() bool { return h.pub.count(key("BTC_USDT", pb.Channel_CHANNEL_MARK_PRICE)) > 0 })
+	connection := harness.connection(t, 0)
+	connection.Push([]byte("BTC_USDT"))
+	eventually(t, "first publish", func() bool { return harness.recorder.count(key("BTC_USDT", manoochv1.Channel_CHANNEL_MARK_PRICE)) > 0 })
 
 	start := time.Now()
 	cancel()
-	eventually(t, "the connection to be closed", conn.IsClosed)
+	eventually(t, "the connection to be closed", connection.IsClosed)
 
 	if elapsed := time.Since(start); elapsed >= leakTimeout {
 		t.Errorf("shutdown took %v, past the %v leak timeout: the read was not unblocked by Close", elapsed, leakTimeout)
 	}
-	if h.proc.Leaked() != 0 {
-		t.Errorf("%d goroutines leaked on a clean shutdown", h.proc.Leaked())
+	if harness.process.Leaked() != 0 {
+		t.Errorf("%d goroutines leaked on a clean shutdown", harness.process.Leaked())
 	}
 }
 
@@ -464,27 +464,27 @@ func TestShutdownClosesTheConnection(t *testing.T) {
 // dark on every other stream, and the keys it would have refreshed expire on
 // their own and report themselves stale.
 func TestRejectedFrameDoesNotStopTheStream(t *testing.T) {
-	h := newHarness(t)
-	h.run(t)
+	harness := newHarness(t)
+	harness.run(t)
 
-	conn := h.conn(t, 0)
-	conn.Push([]byte("not a symbol at all"))
+	connection := harness.connection(t, 0)
+	connection.Push([]byte("not a symbol at all"))
 
 	eventually(t, "the venue to be marked degraded", func() bool {
-		st, _ := h.tracker.Status(h.specs[0])
-		return st == pb.Status_STATUS_DEGRADED
+		status, _ := harness.tracker.Status(harness.specifications[0])
+		return status == manoochv1.Status_STATUS_DEGRADED
 	})
 
-	conn.Push([]byte("BTC_USDT"))
-	mark := key("BTC_USDT", pb.Channel_CHANNEL_MARK_PRICE)
+	connection.Push([]byte("BTC_USDT"))
+	mark := key("BTC_USDT", manoochv1.Channel_CHANNEL_MARK_PRICE)
 	eventually(t, "the stream to recover", func() bool {
-		st, _ := h.tracker.Status(h.specs[0])
-		return h.pub.count(mark) > 0 && st == pb.Status_STATUS_HEALTHY
+		status, _ := harness.tracker.Status(harness.specifications[0])
+		return harness.recorder.count(mark) > 0 && status == manoochv1.Status_STATUS_HEALTHY
 	})
 
-	h.mu.Lock()
-	conns := len(h.conns)
-	h.mu.Unlock()
+	harness.mutex.Lock()
+	conns := len(harness.conns)
+	harness.mutex.Unlock()
 	if conns != 1 {
 		t.Errorf("%d connections opened; a malformed frame must not redial", conns)
 	}
@@ -494,37 +494,37 @@ func TestRejectedFrameDoesNotStopTheStream(t *testing.T) {
 // parsed, not whether the socket behind it is healthy, so its optimistic
 // default must never reach the wire unchallenged.
 func TestStatusIsStampedBySupervisorNotAdapter(t *testing.T) {
-	h := newHarness(t)
+	harness := newHarness(t)
 
 	// The venue's clock 20 seconds ahead of ours, which is past the stale
 	// threshold. The adapter still reports every frame as HEALTHY.
-	h.adapter.ParseFunc = func(frame []byte, recvNs int64) ([]core.Message, error) {
-		ref, err := core.ParseCanonical(string(frame), coretest.MarketType)
+	harness.adapter.ParseFunc = func(frame []byte, receivedNs int64) ([]core.Message, error) {
+		reference, err := core.ParseCanonical(string(frame), coretest.MarketType)
 		if err != nil {
 			return nil, err
 		}
-		m := h.adapter.Message(core.StreamSpec{Instrument: ref, Channel: pb.Channel_CHANNEL_MARK_PRICE}, recvNs, pb.Source_SOURCE_WEBSOCKET)
-		m.Proto.(*pb.MarkPrice).Env.ExchangeTimeNs = recvNs + int64(20*time.Second)
-		return []core.Message{m}, nil
+		message := harness.adapter.Message(core.StreamSpec{Instrument: reference, Channel: manoochv1.Channel_CHANNEL_MARK_PRICE}, receivedNs, manoochv1.Source_SOURCE_WEBSOCKET)
+		message.Proto.(*manoochv1.MarkPrice).Env.ExchangeTimeNs = receivedNs + int64(20*time.Second)
+		return []core.Message{message}, nil
 	}
-	h.run(t)
+	harness.run(t)
 
-	conn := h.conn(t, 0)
-	mark := key("BTC_USDT", pb.Channel_CHANNEL_MARK_PRICE)
+	connection := harness.connection(t, 0)
+	mark := key("BTC_USDT", manoochv1.Channel_CHANNEL_MARK_PRICE)
 
 	// The first frame is what teaches the tracker about the skew, so the
 	// status it stamps lands on the second.
-	conn.Push([]byte("BTC_USDT"))
-	eventually(t, "first publish", func() bool { return h.pub.count(mark) > 0 })
-	before := h.pub.count(mark)
-	conn.Push([]byte("BTC_USDT"))
-	eventually(t, "the next publish", func() bool { return h.pub.count(mark) > before })
+	connection.Push([]byte("BTC_USDT"))
+	eventually(t, "first publish", func() bool { return harness.recorder.count(mark) > 0 })
+	before := harness.recorder.count(mark)
+	connection.Push([]byte("BTC_USDT"))
+	eventually(t, "the next publish", func() bool { return harness.recorder.count(mark) > before })
 
-	env := h.pub.envelope(mark)
-	if env.Status != pb.Status_STATUS_STALE {
-		t.Errorf("status = %s, want STALE; the adapter's HEALTHY reached the wire", core.StatusName(env.Status))
+	envelope := harness.recorder.envelope(mark)
+	if envelope.Status != manoochv1.Status_STATUS_STALE {
+		t.Errorf("status = %s, want STALE; the adapter's HEALTHY reached the wire", core.StatusName(envelope.Status))
 	}
-	if env.StatusReason == "" {
+	if envelope.StatusReason == "" {
 		t.Error("STALE published with no reason")
 	}
 }
@@ -533,22 +533,22 @@ func TestStatusIsStampedBySupervisorNotAdapter(t *testing.T) {
 // four hours. Going first turns that from a gap into a handover — the streams
 // stay inside their TTL across it and nobody finds out by not being sent data.
 func TestProactiveReconnectAtMaxAge(t *testing.T) {
-	h := newHarness(t)
-	h.withMaxAge(t, 30*time.Millisecond)
-	h.run(t)
+	harness := newHarness(t)
+	harness.withMaxAge(t, 30*time.Millisecond)
+	harness.run(t)
 
-	first := h.conn(t, 0)
+	first := harness.connection(t, 0)
 	first.Push([]byte("BTC_USDT"))
-	mark := key("BTC_USDT", pb.Channel_CHANNEL_MARK_PRICE)
-	eventually(t, "first publish", func() bool { return h.pub.count(mark) > 0 })
+	mark := key("BTC_USDT", manoochv1.Channel_CHANNEL_MARK_PRICE)
+	eventually(t, "first publish", func() bool { return harness.recorder.count(mark) > 0 })
 
 	// Nothing failed: the socket is healthy and still gets replaced.
 	eventually(t, "the aged socket to be closed", first.IsClosed)
 
-	second := h.conn(t, 1)
-	before := h.pub.count(mark)
+	second := harness.connection(t, 1)
+	before := harness.recorder.count(mark)
 	second.Push([]byte("BTC_USDT"))
-	eventually(t, "the replacement socket to publish", func() bool { return h.pub.count(mark) > before })
+	eventually(t, "the replacement socket to publish", func() bool { return harness.recorder.count(mark) > before })
 }
 
 // TestSkewIsOnlyMeasuredFromASendTime: a venue that stamps a value with the
@@ -557,34 +557,34 @@ func TestProactiveReconnectAtMaxAge(t *testing.T) {
 // settlement time, hours old on arrival — and differencing it against arrival
 // would take every stream on the venue to STALE once a minute.
 func TestSkewIsOnlyMeasuredFromASendTime(t *testing.T) {
-	h := newHarness(t)
+	harness := newHarness(t)
 
 	// The frame carries one message: a funding rate stamped with a settlement
 	// four hours ago, exactly as KuCoin's funding.rate subject arrives.
 	const fourHours = 4 * time.Hour
-	h.adapter.ParseFunc = func(frame []byte, recvNs int64) ([]core.Message, error) {
-		funding := h.adapter.Message(h.specs[2], recvNs, pb.Source_SOURCE_WEBSOCKET)
-		env := funding.Proto.(interface{ GetEnv() *pb.Envelope }).GetEnv()
-		env.ExchangeTimeNs = recvNs - int64(fourHours)
-		env.ExchangeTimeIsSendTime = false
+	harness.adapter.ParseFunc = func(frame []byte, receivedNs int64) ([]core.Message, error) {
+		funding := harness.adapter.Message(harness.specifications[2], receivedNs, manoochv1.Source_SOURCE_WEBSOCKET)
+		envelope := funding.Proto.(interface{ GetEnv() *manoochv1.Envelope }).GetEnv()
+		envelope.ExchangeTimeNs = receivedNs - int64(fourHours)
+		envelope.ExchangeTimeIsSendTime = false
 		return []core.Message{funding}, nil
 	}
-	h.run(t)
+	harness.run(t)
 
-	conn := h.conn(t, 0)
-	conn.Push([]byte("BTC_USDT"))
+	connection := harness.connection(t, 0)
+	connection.Push([]byte("BTC_USDT"))
 
-	k := key("BTC_USDT", pb.Channel_CHANNEL_FUNDING)
-	eventually(t, "the funding message to be published", func() bool { return h.pub.count(k) > 0 })
+	k := key("BTC_USDT", manoochv1.Channel_CHANNEL_FUNDING)
+	eventually(t, "the funding message to be published", func() bool { return harness.recorder.count(k) > 0 })
 
 	// The mark price is a send time and reports a skew of zero; the funding
 	// message is ignored for this purpose rather than overwriting it.
-	if st, reason := h.tracker.VenueStatus(); st != pb.Status_STATUS_HEALTHY {
+	if status, reason := harness.tracker.VenueStatus(); status != manoochv1.Status_STATUS_HEALTHY {
 		t.Errorf("venue status = %s (%q); an event time was mistaken for a clock reading",
-			core.StatusName(st), reason)
+			core.StatusName(status), reason)
 	}
-	if st, reason := h.tracker.Status(h.specs[2]); st != pb.Status_STATUS_HEALTHY {
-		t.Errorf("funding status = %s (%q), want HEALTHY", core.StatusName(st), reason)
+	if status, reason := harness.tracker.Status(harness.specifications[2]); status != manoochv1.Status_STATUS_HEALTHY {
+		t.Errorf("funding status = %s (%q), want HEALTHY", core.StatusName(status), reason)
 	}
 }
 
@@ -594,24 +594,24 @@ func TestSkewIsOnlyMeasuredFromASendTime(t *testing.T) {
 // fixed the problem is a loop with no exit on any venue whose dial takes longer
 // than the shortest TTL, which is every venue that bootstraps over REST.
 func TestReconnectDoesNotRedialItself(t *testing.T) {
-	h := newHarness(t)
-	h.proc = nil // rebuilt below with the real grace period
+	harness := newHarness(t)
+	harness.process = nil // rebuilt below with the real grace period
 
-	specs, err := coretest.Specs("BTC_USDT")
+	specifications, err := coretest.Specifications("BTC_USDT")
 	if err != nil {
 		t.Fatal(err)
 	}
-	plans, err := h.adapter.PlanSubscriptions(specs)
+	plans, err := harness.adapter.PlanSubscriptions(specifications)
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.proc, err = supervisor.New(supervisor.Options{
+	harness.process, err = supervisor.New(supervisor.Options{
 		Venue:         coretest.Venue,
-		Adapter:       h.adapter,
+		Adapter:       harness.adapter,
 		Plans:         plans,
-		Publisher:     h.pub,
-		Health:        h.tracker,
-		Metrics:       h.metrics,
+		Publisher:     harness.recorder,
+		Health:        harness.tracker,
+		Metrics:       harness.metrics,
 		Log:           quiet(),
 		StreamBackoff: fastBackoff(),
 		SocketBackoff: fastBackoff(),
@@ -623,17 +623,17 @@ func TestReconnectDoesNotRedialItself(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.run(t)
+	harness.run(t)
 
-	first := h.conn(t, 0)
-	mark := key("BTC_USDT", pb.Channel_CHANNEL_MARK_PRICE)
+	first := harness.connection(t, 0)
+	mark := key("BTC_USDT", manoochv1.Channel_CHANNEL_MARK_PRICE)
 	first.Push([]byte("BTC_USDT"))
-	eventually(t, "first publish", func() bool { return h.pub.count(mark) > 0 })
+	eventually(t, "first publish", func() bool { return harness.recorder.count(mark) > 0 })
 
 	// Every key on the socket expires at once, which is exactly the burst a
 	// reconnect produces. Inside the grace it must change nothing.
-	for _, spec := range h.specs {
-		h.proc.KeyExpired(spec)
+	for _, specification := range harness.specifications {
+		harness.process.KeyExpired(specification)
 	}
 
 	time.Sleep(200 * time.Millisecond)
@@ -642,7 +642,7 @@ func TestReconnectDoesNotRedialItself(t *testing.T) {
 	}
 
 	// And it is still delivering on the same connection.
-	before := h.pub.count(mark)
+	before := harness.recorder.count(mark)
 	first.Push([]byte("BTC_USDT"))
-	eventually(t, "the socket to keep publishing", func() bool { return h.pub.count(mark) > before })
+	eventually(t, "the socket to keep publishing", func() bool { return harness.recorder.count(mark) > before })
 }

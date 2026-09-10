@@ -5,20 +5,20 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/you/manooch/gen/manoochv1"
+	"github.com/you/manooch/gen/manoochv1"
 	"github.com/you/manooch/internal/core"
 	"github.com/you/manooch/internal/publish"
 )
 
 func instrumentKey() string {
-	return publish.Key("TESTVENUE", pb.MarketType_MARKET_TYPE_PERP_LINEAR, "BTC_USDT", pb.Channel_CHANNEL_HEALTH)
+	return publish.Key("TESTVENUE", manoochv1.MarketType_MARKET_TYPE_PERP_LINEAR, "BTC_USDT", manoochv1.Channel_CHANNEL_HEALTH)
 }
 
 // find returns the last message published to key.
-func find(msgs []recorded, key string) *recorded {
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].key == key {
-			return &msgs[i]
+func find(messages []recorded, key string) *recorded {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].key == key {
+			return &messages[i]
 		}
 	}
 	return nil
@@ -27,25 +27,25 @@ func find(msgs []recorded, key string) *recorded {
 // TestPublishesOnTransition: a consumer that learns about a transition one
 // heartbeat late is a consumer that traded through it.
 func TestPublishesOnTransition(t *testing.T) {
-	c, pub := newClock(), &recorder{}
-	tr := newTracker(t, c, pub)
-	spec := specs(t)[0]
-	tr.Received(spec)
-	pub.reset()
+	clock, recorder := newClock(), &recorder{}
+	tracker := newTracker(t, clock, recorder)
+	specification := specifications(t)[0]
+	tracker.Received(specification)
+	recorder.reset()
 
-	tr.FallbackEngaged(spec)
+	tracker.FallbackEngaged(specification)
 
-	got := find(pub.all(), instrumentKey())
+	got := find(recorder.all(), instrumentKey())
 	if got == nil {
-		t.Fatalf("no health message published for %s; got %v", instrumentKey(), pub.all())
+		t.Fatalf("no health message published for %s; got %v", instrumentKey(), recorder.all())
 	}
-	if got.health.Status != pb.Status_STATUS_DEGRADED {
+	if got.health.Status != manoochv1.Status_STATUS_DEGRADED {
 		t.Errorf("status = %s, want DEGRADED", core.StatusName(got.health.Status))
 	}
 	if !got.health.FallbackActive {
 		t.Error("fallback_active is false while the stream is on REST")
 	}
-	if got.health.Env.Source != pb.Source_SOURCE_REST {
+	if got.health.Env.Source != manoochv1.Source_SOURCE_REST {
 		t.Errorf("source = %s, want REST", core.SourceName(got.health.Env.Source))
 	}
 }
@@ -53,16 +53,16 @@ func TestPublishesOnTransition(t *testing.T) {
 // TestNoPublishWithoutATransition: the heartbeat is the only thing that
 // republishes an unchanged status, or every message would carry one.
 func TestNoPublishWithoutATransition(t *testing.T) {
-	c, pub := newClock(), &recorder{}
-	tr := newTracker(t, c, pub)
-	spec := specs(t)[0]
-	tr.Received(spec)
-	pub.reset()
+	clock, recorder := newClock(), &recorder{}
+	tracker := newTracker(t, clock, recorder)
+	specification := specifications(t)[0]
+	tracker.Received(specification)
+	recorder.reset()
 
 	for range 100 {
-		tr.Received(spec)
+		tracker.Received(specification)
 	}
-	if n := len(pub.all()); n != 0 {
+	if n := len(recorder.all()); n != 0 {
 		t.Errorf("%d health messages published for 100 unchanged updates", n)
 	}
 }
@@ -70,22 +70,22 @@ func TestNoPublishWithoutATransition(t *testing.T) {
 // TestVenueKeyCarriesConnectionState: socket state, skew and leaks belong to no
 // single stream, so they need a key of their own.
 func TestVenueKeyCarriesConnectionState(t *testing.T) {
-	c, pub := newClock(), &recorder{}
-	tr := newTracker(t, c, pub)
-	tr.Received(specs(t)[0])
-	pub.reset()
+	clock, recorder := newClock(), &recorder{}
+	tracker := newTracker(t, clock, recorder)
+	tracker.Received(specifications(t)[0])
+	recorder.reset()
 
-	tr.Leaked(3)
+	tracker.Leaked(3)
 
 	key := publish.VenueKey("TESTVENUE", publish.SubjectHealth)
-	got := find(pub.all(), key)
+	got := find(recorder.all(), key)
 	if got == nil {
 		t.Fatalf("no venue health message published to %s", key)
 	}
 	if got.health.LeakedGoroutines != 3 {
 		t.Errorf("leaked_goroutines = %d, want 3", got.health.LeakedGoroutines)
 	}
-	if got.health.Status != pb.Status_STATUS_DEGRADED {
+	if got.health.Status != manoochv1.Status_STATUS_DEGRADED {
 		t.Errorf("venue status = %s, want DEGRADED", core.StatusName(got.health.Status))
 	}
 }
@@ -94,28 +94,28 @@ func TestVenueKeyCarriesConnectionState(t *testing.T) {
 // fire-and-forget, so without it "healthy and quiet" and "the health publisher
 // is dead" are the same observation.
 func TestHeartbeatPublishesUnchangedState(t *testing.T) {
-	c, pub := newClock(), &recorder{}
-	tr := newTracker(t, c, pub)
-	tr.Received(specs(t)[0])
+	clock, recorder := newClock(), &recorder{}
+	tracker := newTracker(t, clock, recorder)
+	tracker.Received(specifications(t)[0])
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	done := make(chan struct{})
-	go func() { defer close(done); tr.Run(ctx) }()
+	go func() { defer close(done); tracker.Run(ctx) }()
 
 	// Three heartbeats at the 1s interval the tracker was built with would take
 	// three seconds; one immediate beat plus one tick is enough to prove the
 	// ticker republishes with nothing changed.
 	deadline := time.After(5 * time.Second)
 	for {
-		msgs := pub.all()
-		if countKey(msgs, instrumentKey()) >= 2 && countKey(msgs, publish.VenueKey("TESTVENUE", publish.SubjectHealth)) >= 2 {
+		messages := recorder.all()
+		if countKey(messages, instrumentKey()) >= 2 && countKey(messages, publish.VenueKey("TESTVENUE", publish.SubjectHealth)) >= 2 {
 			break
 		}
 		select {
 		case <-deadline:
-			t.Fatalf("fewer than two heartbeats in 5s: %d messages", len(msgs))
+			t.Fatalf("fewer than two heartbeats in 5s: %d messages", len(messages))
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
@@ -132,36 +132,36 @@ func TestHeartbeatPublishesUnchangedState(t *testing.T) {
 // detectably dead itself, or the last message ever published sits in Redis
 // looking current forever.
 func TestHealthKeyExpiresIfThePublisherStops(t *testing.T) {
-	c, pub := newClock(), &recorder{}
-	tr := newTracker(t, c, pub)
-	tr.Received(specs(t)[0])
-	pub.reset()
+	clock, recorder := newClock(), &recorder{}
+	tracker := newTracker(t, clock, recorder)
+	tracker.Received(specifications(t)[0])
+	recorder.reset()
 
-	tr.KeyExpired(specs(t)[0])
+	tracker.KeyExpired(specifications(t)[0])
 
-	got := find(pub.all(), instrumentKey())
+	got := find(recorder.all(), instrumentKey())
 	if got == nil {
 		t.Fatal("no health message published")
 	}
 	// heartbeat_interval 1s × 3.
-	if want := 3 * time.Second; got.ttl != want {
-		t.Errorf("health key TTL = %v, want %v", got.ttl, want)
+	if want := 3 * time.Second; got.timeToLive != want {
+		t.Errorf("health key TTL = %v, want %v", got.timeToLive, want)
 	}
 }
 
 // TestUnknownStatusIsNotPublished: a key whose presence claims the publisher is
 // alive while its content says nothing is worse than no key.
 func TestUnknownStatusIsNotPublished(t *testing.T) {
-	c, pub := newClock(), &recorder{}
-	tr := newTracker(t, c, pub)
-	_ = tr
+	clock, recorder := newClock(), &recorder{}
+	tracker := newTracker(t, clock, recorder)
+	_ = tracker
 
-	for _, m := range pub.all() {
-		if m.health.Status == pb.Status_STATUS_UNSPECIFIED {
-			t.Errorf("published %s with an unspecified status", m.key)
+	for _, recorded := range recorder.all() {
+		if recorded.health.Status == manoochv1.Status_STATUS_UNSPECIFIED {
+			t.Errorf("published %s with an unspecified status", recorded.key)
 		}
-		if m.health.Env.Status == pb.Status_STATUS_UNSPECIFIED {
-			t.Errorf("published %s with an unspecified envelope status", m.key)
+		if recorded.health.Env.Status == manoochv1.Status_STATUS_UNSPECIFIED {
+			t.Errorf("published %s with an unspecified envelope status", recorded.key)
 		}
 	}
 }
@@ -169,20 +169,20 @@ func TestUnknownStatusIsNotPublished(t *testing.T) {
 // TestRestartsAndAgeReachTheKey, which is what manooch-status reads for its
 // RESTARTS column.
 func TestRestartsAndAgeReachTheKey(t *testing.T) {
-	c, pub := newClock(), &recorder{}
-	tr := newTracker(t, c, pub)
-	all := specs(t)
-	for _, s := range all {
-		tr.Received(s)
+	clock, recorder := newClock(), &recorder{}
+	tracker := newTracker(t, clock, recorder)
+	all := specifications(t)
+	for _, specification := range all {
+		tracker.Received(specification)
 	}
 
-	tr.StreamRestarted(all[0])
-	tr.StreamRestarted(all[1])
-	c.advance(1500 * time.Millisecond)
-	pub.reset()
-	tr.KeyExpired(all[2]) // any transition, to force a publish
+	tracker.StreamRestarted(all[0])
+	tracker.StreamRestarted(all[1])
+	clock.advance(1500 * time.Millisecond)
+	recorder.reset()
+	tracker.KeyExpired(all[2]) // any transition, to force a publish
 
-	got := find(pub.all(), instrumentKey())
+	got := find(recorder.all(), instrumentKey())
 	if got == nil {
 		t.Fatal("no health message published")
 	}
@@ -194,10 +194,10 @@ func TestRestartsAndAgeReachTheKey(t *testing.T) {
 	}
 }
 
-func countKey(msgs []recorded, key string) int {
+func countKey(messages []recorded, key string) int {
 	n := 0
-	for _, m := range msgs {
-		if m.key == key {
+	for _, recorded := range messages {
+		if recorded.key == key {
 			n++
 		}
 	}

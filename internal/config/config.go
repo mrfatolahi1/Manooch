@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"time"
 
-	pb "github.com/you/manooch/gen/manoochv1"
+	"github.com/you/manooch/gen/manoochv1"
 	"github.com/you/manooch/internal/core"
 	"gopkg.in/yaml.v3"
 )
@@ -18,28 +18,28 @@ import (
 // A Duration is a time.Duration that reads and writes as "2s" in YAML.
 type Duration time.Duration
 
-// Std returns the standard library duration.
-func (d Duration) Std() time.Duration { return time.Duration(d) }
+// Standard returns the standard library duration.
+func (duration Duration) Standard() time.Duration { return time.Duration(duration) }
 
 // String renders the duration the way it is written in YAML.
-func (d Duration) String() string { return time.Duration(d).String() }
+func (duration Duration) String() string { return time.Duration(duration).String() }
 
 // UnmarshalYAML parses a Go duration string such as "500ms".
-func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
+func (duration *Duration) UnmarshalYAML(node *yaml.Node) error {
 	var s string
-	if err := n.Decode(&s); err != nil {
-		return fmt.Errorf("line %d: duration must be a string like \"500ms\" or \"1h\"", n.Line)
+	if err := node.Decode(&s); err != nil {
+		return fmt.Errorf("line %d: duration must be a string like \"500ms\" or \"1h\"", node.Line)
 	}
 	v, err := time.ParseDuration(s)
 	if err != nil {
-		return fmt.Errorf("line %d: invalid duration %q", n.Line, s)
+		return fmt.Errorf("line %d: invalid duration %q", node.Line, s)
 	}
-	*d = Duration(v)
+	*duration = Duration(v)
 	return nil
 }
 
 // MarshalYAML writes the duration back as a string.
-func (d Duration) MarshalYAML() (any, error) { return time.Duration(d).String(), nil }
+func (duration Duration) MarshalYAML() (any, error) { return time.Duration(duration).String(), nil }
 
 // Config is defaults.yaml overlaid with one venue file. Any key the venue file
 // sets wins.
@@ -82,7 +82,7 @@ type HTTPConfig struct {
 // RedisConfig is the redis section.
 type RedisConfig struct {
 	Addr        string   `yaml:"addr"         validate:"required,hostname_port"`
-	DB          int      `yaml:"db"           validate:"gte=0"`
+	Database    int      `yaml:"db"           validate:"gte=0"`
 	DialTimeout Duration `yaml:"dial_timeout" validate:"required,gt=0"`
 	ReadTimeout Duration `yaml:"read_timeout" validate:"required,gt=0"`
 	PoolSize    int      `yaml:"pool_size"    validate:"required,gte=1"`
@@ -105,11 +105,11 @@ type PublishConfig struct {
 // HealthConfig is the health section.
 type HealthConfig struct {
 	HeartbeatInterval Duration `yaml:"heartbeat_interval" validate:"required,gt=0"`
-	// TTLMultiplier scales a stream's cadence into its key TTL. Below 2 a
+	// TimeToLiveMultiplier scales a stream's cadence into its key TTL. Below 2 a
 	// single late message expires the key and a healthy stream reads as stale.
-	TTLMultiplier       int   `yaml:"ttl_multiplier"         validate:"required,gte=2"`
-	ClockSkewDegradedMS int64 `yaml:"clock_skew_degraded_ms" validate:"required,gt=0"`
-	ClockSkewStaleMS    int64 `yaml:"clock_skew_stale_ms"    validate:"required,gt=0"`
+	TimeToLiveMultiplier int   `yaml:"ttl_multiplier"         validate:"required,gte=2"`
+	ClockSkewDegradedMS  int64 `yaml:"clock_skew_degraded_ms" validate:"required,gt=0"`
+	ClockSkewStaleMS     int64 `yaml:"clock_skew_stale_ms"    validate:"required,gt=0"`
 }
 
 // FallbackConfig is the fallback section.
@@ -152,8 +152,8 @@ type MetadataConfig struct {
 
 // EndpointsConfig maps a market type name ("SPOT", "PERP_LINEAR") to a URL.
 type EndpointsConfig struct {
-	WS   map[string]string `yaml:"ws"   validate:"required,min=1"`
-	REST map[string]string `yaml:"rest" validate:"required,min=1"`
+	WebSocket map[string]string `yaml:"ws"   validate:"required,min=1"`
+	REST      map[string]string `yaml:"rest" validate:"required,min=1"`
 }
 
 // RateLimitConfig is the rate_limit section, translated into the buckets
@@ -163,8 +163,8 @@ type RateLimitConfig struct {
 	// MaxWeightFraction is the share of the venue's published budget to use.
 	// Never 1: the venue counts weight differently than we do.
 	MaxWeightFraction          float64 `yaml:"max_weight_fraction"          validate:"required,gt=0,lte=1"`
-	WSConnectPer5Min           int     `yaml:"ws_connect_per_5min"          validate:"required,gt=0"`
-	WSConnectFraction          float64 `yaml:"ws_connect_fraction"          validate:"required,gt=0,lte=1"`
+	WebSocketConnectPer5Min    int     `yaml:"ws_connect_per_5min"          validate:"required,gt=0"`
+	WebSocketConnectFraction   float64 `yaml:"ws_connect_fraction"          validate:"required,gt=0,lte=1"`
 	SubscriptionsPerConnection int     `yaml:"subscriptions_per_connection" validate:"required,gt=0"`
 }
 
@@ -181,7 +181,8 @@ type ConnectionConfig struct {
 	MaxAge Duration `yaml:"max_age" validate:"required,gt=0"`
 }
 
-// QuirksConfig is the quirks section: per-venue behaviour the adapter must honour.
+// QuirksConfig is the quirks section: per-venue behaviour the adapter must
+// honour.
 type QuirksConfig struct {
 	TimestampUnit string `yaml:"timestamp_unit" validate:"required,oneof=ms us ns s"`
 	// Cadence is how often the venue updates each channel, keyed by channel
@@ -198,33 +199,34 @@ type InstrumentConfig struct {
 	Symbols    []string `yaml:"symbols"     validate:"required,min=1"`
 
 	// Resolved by Load once the strings above have been checked.
-	MT    pb.MarketType `yaml:"-"`
-	Chans []pb.Channel  `yaml:"-"`
+	ResolvedMarketType manoochv1.MarketType `yaml:"-"`
+	ResolvedChannels   []manoochv1.Channel  `yaml:"-"`
 }
 
 // Cadence is how often the venue updates a channel, or zero when the venue file
 // declares none. Load rejects a configured channel with no cadence, so zero
 // only reaches a caller asking about a channel nobody subscribed to.
-func (c *Config) Cadence(ch pb.Channel) time.Duration {
-	return c.Quirks.Cadence[core.ChannelName(ch)].Std()
+func (configuration *Config) Cadence(channel manoochv1.Channel) time.Duration {
+	return configuration.Quirks.Cadence[core.ChannelName(channel)].Standard()
 }
 
-// TTL is a channel's Redis key TTL: its cadence times health.ttl_multiplier.
-// Key present means fresh, key absent means stale; there is no third state.
-func (c *Config) TTL(ch pb.Channel) time.Duration {
-	return c.Cadence(ch) * time.Duration(c.Health.TTLMultiplier)
+// TimeToLive is a channel's Redis key expiry: its cadence times
+// health.ttl_multiplier. Key present means fresh, key absent means stale;
+// there is no third state.
+func (configuration *Config) TimeToLive(channel manoochv1.Channel) time.Duration {
+	return configuration.Cadence(channel) * time.Duration(configuration.Health.TimeToLiveMultiplier)
 }
 
-// TTLs is the TTL of every channel the venue declares a cadence for, which is
-// what an adapter needs to stamp its messages.
-func (c *Config) TTLs() map[pb.Channel]time.Duration {
-	out := make(map[pb.Channel]time.Duration, len(c.Quirks.Cadence))
-	for name := range c.Quirks.Cadence {
-		ch, err := core.ParseChannel(name)
+// TimeToLiveByChannel is the time-to-live of every channel the venue declares a
+// cadence for, which is what an adapter needs to stamp its messages.
+func (configuration *Config) TimeToLiveByChannel() map[manoochv1.Channel]time.Duration {
+	out := make(map[manoochv1.Channel]time.Duration, len(configuration.Quirks.Cadence))
+	for name := range configuration.Quirks.Cadence {
+		channel, err := core.ParseChannel(name)
 		if err != nil {
 			continue // Load already rejected it
 		}
-		out[ch] = c.TTL(ch)
+		out[channel] = configuration.TimeToLive(channel)
 	}
 	return out
 }
@@ -236,18 +238,18 @@ func (c *Config) TTLs() map[pb.Channel]time.Duration {
 // every venue at once — which stopped being possible the moment a second one
 // spelled bitcoin XBT.
 type Stream struct {
-	MarketType pb.MarketType
+	MarketType manoochv1.MarketType
 	Symbol     string // canonical, "BTC_USDT"
-	Channel    pb.Channel
+	Channel    manoochv1.Channel
 }
 
 // Streams expands the instrument blocks into individual streams.
-func (c *Config) Streams() []Stream {
+func (configuration *Config) Streams() []Stream {
 	var out []Stream
-	for _, in := range c.Instruments {
-		for _, sym := range in.Symbols {
-			for _, ch := range in.Chans {
-				out = append(out, Stream{MarketType: in.MT, Symbol: sym, Channel: ch})
+	for _, in := range configuration.Instruments {
+		for _, symbol := range in.Symbols {
+			for _, channel := range in.ResolvedChannels {
+				out = append(out, Stream{MarketType: in.ResolvedMarketType, Symbol: symbol, Channel: channel})
 			}
 		}
 	}

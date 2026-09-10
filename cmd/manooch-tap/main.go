@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
-	pb "github.com/you/manooch/gen/manoochv1"
+	"github.com/you/manooch/gen/manoochv1"
 	"github.com/you/manooch/internal/core"
 	"github.com/you/manooch/internal/publish"
 	"github.com/you/manooch/pkg/price"
@@ -31,12 +31,12 @@ func main() {
 
 func run() error {
 	var (
-		pattern = flag.String("pattern", publish.MatchPattern(""), "Pub/Sub pattern to subscribe to")
-		addr    = flag.String("redis", "127.0.0.1:6379", "Redis address")
-		db      = flag.Int("db", 0, "Redis database")
-		asJSON  = flag.Bool("json", false, "print each message as JSON")
-		raw     = flag.Bool("raw", false, "write raw message bytes to --out, for building test fixtures")
-		out     = flag.String("out", filepath.Join("testdata", "raw"), "directory for --raw output")
+		pattern  = flag.String("pattern", publish.MatchPattern(""), "Pub/Sub pattern to subscribe to")
+		address  = flag.String("redis", "127.0.0.1:6379", "Redis address")
+		database = flag.Int("db", 0, "Redis database")
+		asJSON   = flag.Bool("json", false, "print each message as JSON")
+		raw      = flag.Bool("raw", false, "write raw message bytes to --out, for building test fixtures")
+		out      = flag.String("out", filepath.Join("testdata", "raw"), "directory for --raw output")
 	)
 	flag.Parse()
 
@@ -50,37 +50,37 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	rdb := redis.NewClient(&redis.Options{Addr: *addr, DB: *db})
-	defer rdb.Close()
-	if err := rdb.Ping(ctx).Err(); err != nil {
-		return fmt.Errorf("redis %s: %w", *addr, err)
+	redisClient := redis.NewClient(&redis.Options{Addr: *address, DB: *database})
+	defer redisClient.Close()
+	if err := redisClient.Ping(ctx).Err(); err != nil {
+		return fmt.Errorf("redis %s: %w", *address, err)
 	}
 
-	sub := rdb.PSubscribe(ctx, *pattern)
-	defer sub.Close()
-	if _, err := sub.Receive(ctx); err != nil {
+	subscription := redisClient.PSubscribe(ctx, *pattern)
+	defer subscription.Close()
+	if _, err := subscription.Receive(ctx); err != nil {
 		return fmt.Errorf("subscribe %s: %w", *pattern, err)
 	}
 	fmt.Fprintf(os.Stderr, "subscribed to %s\n", *pattern)
 
-	t := &tap{seen: map[string]seen{}, rawDir: *out}
+	tap := &tap{seen: map[string]seen{}, rawDir: *out}
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		case m, ok := <-sub.Channel():
+		case message, ok := <-subscription.Channel():
 			if !ok {
 				return nil
 			}
-			t.handle(m.Channel, []byte(m.Payload), *asJSON, *raw)
+			tap.handle(message.Channel, []byte(message.Payload), *asJSON, *raw)
 		}
 	}
 }
 
 // seen is the last message on a topic, so gaps are spotted as they go past.
 type seen struct {
-	publishSeq uint64
-	instanceID string
+	publishSequence uint64
+	instanceID      string
 }
 
 type tap struct {
@@ -89,50 +89,50 @@ type tap struct {
 	n      int
 }
 
-func (t *tap) handle(key string, payload []byte, asJSON, raw bool) {
+func (tap *tap) handle(key string, payload []byte, asJSON, raw bool) {
 	parts, err := publish.ParseKey(key)
 	if err != nil {
 		fmt.Printf("%s  ?? %v\n", stamp(time.Now()), err)
 		return
 	}
-	ch := parts.Channel
+	channel := parts.Channel
 	if parts.VenueScoped {
-		sub, ok := publish.ChannelForSubject(parts.Subject)
+		subjectChannel, ok := publish.ChannelForSubject(parts.Subject)
 		if !ok {
 			fmt.Printf("%s  %s  %d bytes\n", stamp(time.Now()), key, len(payload))
 			return
 		}
-		ch = sub
+		channel = subjectChannel
 	}
 
-	msg, env, err := publish.Decode(ch, payload)
+	message, envelope, err := publish.Decode(channel, payload)
 	if err != nil {
 		fmt.Printf("%s  %s  decode: %v\n", stamp(time.Now()), key, err)
 		return
 	}
 
 	if raw {
-		t.writeRaw(key, env.PublishSeq, payload)
+		tap.writeRaw(key, envelope.PublishSeq, payload)
 	}
 
 	// Pub/Sub is fire and forget: a subscriber that fell behind, or one Redis
 	// dropped for overrunning its output buffer, misses messages with no error
 	// anywhere. A publish_seq jump is the only evidence; instance_id separates
 	// a drop from a restart.
-	if prev, ok := t.seen[key]; ok {
+	if prev, ok := tap.seen[key]; ok {
 		switch {
-		case prev.instanceID != env.InstanceId:
+		case prev.instanceID != envelope.InstanceId:
 			fmt.Printf("%s  %s  !! feed restarted: instance %s -> %s\n",
-				stamp(time.Now()), key, short(prev.instanceID), short(env.InstanceId))
-		case env.PublishSeq > prev.publishSeq+1:
+				stamp(time.Now()), key, short(prev.instanceID), short(envelope.InstanceId))
+		case envelope.PublishSeq > prev.publishSequence+1:
 			fmt.Printf("%s  %s  !! dropped %d message(s): publish_seq %d -> %d\n",
-				stamp(time.Now()), key, env.PublishSeq-prev.publishSeq-1, prev.publishSeq, env.PublishSeq)
+				stamp(time.Now()), key, envelope.PublishSeq-prev.publishSequence-1, prev.publishSequence, envelope.PublishSeq)
 		}
 	}
-	t.seen[key] = seen{publishSeq: env.PublishSeq, instanceID: env.InstanceId}
+	tap.seen[key] = seen{publishSequence: envelope.PublishSeq, instanceID: envelope.InstanceId}
 
 	if asJSON {
-		body, err := protojson.MarshalOptions{}.Marshal(msg)
+		body, err := protojson.MarshalOptions{}.Marshal(message)
 		if err != nil {
 			fmt.Printf("%s  %s  json: %v\n", stamp(time.Now()), key, err)
 			return
@@ -142,29 +142,29 @@ func (t *tap) handle(key string, payload []byte, asJSON, raw bool) {
 	}
 
 	fmt.Printf("%s  %-50s seq=%-6d %-8s %s\n",
-		stamp(time.Unix(0, env.PublishTimeNs)), key, env.PublishSeq,
-		core.StatusName(env.Status), summarize(msg))
+		stamp(time.Unix(0, envelope.PublishTimeNs)), key, envelope.PublishSeq,
+		core.StatusName(envelope.Status), summarize(message))
 }
 
-func (t *tap) writeRaw(key string, seq uint64, payload []byte) {
-	name := fmt.Sprintf("%s-%06d.bin", strings.ReplaceAll(key, ":", "_"), seq)
-	if err := os.WriteFile(filepath.Join(t.rawDir, name), payload, 0o644); err != nil {
+func (tap *tap) writeRaw(key string, sequence uint64, payload []byte) {
+	name := fmt.Sprintf("%s-%06d.bin", strings.ReplaceAll(key, ":", "_"), sequence)
+	if err := os.WriteFile(filepath.Join(tap.rawDir, name), payload, 0o644); err != nil {
 		fmt.Fprintf(os.Stderr, "raw write: %v\n", err)
 		return
 	}
-	t.n++
+	tap.n++
 }
 
 // summarize is the few numbers per message worth reading at speed.
-func summarize(msg any) string {
-	switch m := msg.(type) {
-	case *pb.MarkPrice:
+func summarize(message any) string {
+	switch m := message.(type) {
+	case *manoochv1.MarkPrice:
 		return "mark=" + price.Price(m.MarkPrice).String()
 
-	case *pb.IndexPrice:
+	case *manoochv1.IndexPrice:
 		return "index=" + price.Price(m.IndexPrice).String()
 
-	case *pb.Funding:
+	case *manoochv1.Funding:
 		// A zero next-funding time means the venue did not supply one, which is
 		// not the same as a funding settlement in 1970.
 		next := "-"
@@ -177,18 +177,18 @@ func summarize(msg any) string {
 		}
 		return fmt.Sprintf("rate=%s next=%s interval=%s", price.Rate(m.FundingRate), next, interval)
 
-	case *pb.InstrumentMeta:
+	case *manoochv1.InstrumentMeta:
 		return fmt.Sprintf("tick=%s lot=%s min=%s active=%v",
 			price.Price(m.TickSize), price.Size(m.LotSize), price.Size(m.MinSize), m.Active)
 
-	case *pb.RateLimit:
+	case *manoochv1.RateLimit:
 		parts := make([]string, 0, len(m.Budgets))
-		for _, b := range m.Budgets {
-			parts = append(parts, fmt.Sprintf("%s=%d/%d", b.Kind, b.Used, b.Capacity))
+		for _, budget := range m.Budgets {
+			parts = append(parts, fmt.Sprintf("%s=%d/%d", budget.Kind, budget.Used, budget.Capacity))
 		}
 		return strings.Join(parts, " ")
 
-	case *pb.Health:
+	case *manoochv1.Health:
 		s := fmt.Sprintf("status=%s age=%dms reconnects=%d skew=%dms",
 			core.StatusName(m.Status), m.LastMessageAgeMs, m.ReconnectCount, m.ClockSkewMs)
 		if m.Reason != "" {

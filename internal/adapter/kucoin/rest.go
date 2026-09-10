@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"time"
 
-	pb "github.com/you/manooch/gen/manoochv1"
+	"github.com/you/manooch/gen/manoochv1"
 	"github.com/you/manooch/internal/core"
 	"github.com/you/manooch/internal/ratelimit"
 	"github.com/you/manooch/pkg/price"
@@ -46,16 +46,18 @@ const statusOpen = "Open"
 // code other than 200000 is still a failure, and reading only the HTTP status
 // would take the error body for data.
 type restEnvelope struct {
-	Code string          `json:"code"`
-	Msg  string          `json:"msg"`
-	Data json.RawMessage `json:"data"`
+	Code    string          `json:"code"`
+	Message string          `json:"msg"`
+	Data    json.RawMessage `json:"data"`
 }
 
-// currentValue is /mark-price/{symbol}/current and /funding-rate/{symbol}/current.
-// Both answer the same shape; only what "value" means differs.
+// currentValue is /mark-price/{symbol}/current and
+// /funding-rate/{symbol}/current. Both answer the same shape; only what
+// "value" means differs.
 //
-// Numbers are json.Number for the same reason they are on the websocket: KuCoin
-// sends them unquoted, and float64 would round them before pkg/price saw a digit.
+// Numbers are json.Number for the same reason they are on the websocket:
+// KuCoin sends them unquoted, and float64 would round them before pkg/price
+// saw a digit.
 type currentValue struct {
 	Symbol      string      `json:"symbol"`
 	Granularity int64       `json:"granularity"`
@@ -72,149 +74,150 @@ type currentValue struct {
 //
 // The returned message is SOURCE_REST, so a consumer can tell a polled value
 // from a streamed one; nothing else about it differs.
-func (a *Adapter) FetchOnce(ctx context.Context, spec core.StreamSpec) ([]core.Message, error) {
-	if err := a.checkSpec(spec); err != nil {
+func (adapter *Adapter) FetchOnce(ctx context.Context, specification core.StreamSpec) ([]core.Message, error) {
+	if err := adapter.checkSpecification(specification); err != nil {
 		return nil, err
 	}
-	if a.opts.RESTEndpoint == "" {
+	if adapter.options.RESTEndpoint == "" {
 		return nil, fmt.Errorf("kucoin: no rest endpoint")
 	}
-	sym, err := a.VenueSymbol(spec.Instrument)
+	symbol, err := adapter.VenueSymbol(specification.Instrument)
 	if err != nil {
 		return nil, err
 	}
 	// The poll does not happen if there is no budget for it. The caller marks
 	// the stream STALE, which is the truth: nothing is refreshing that key.
-	if err := a.opts.Limiter.Allow(ctx, Venue, ratelimit.LimitRESTWeight, a.RESTCost(core.OpFetchOnce)); err != nil {
-		return nil, fmt.Errorf("kucoin: fetch %s: %w", spec, err)
+	if err := adapter.options.Limiter.Allow(ctx, Venue, ratelimit.LimitRESTWeight, adapter.RESTCost(core.OpFetchOnce)); err != nil {
+		return nil, fmt.Errorf("kucoin: fetch %s: %w", specification, err)
 	}
 
 	path := markPricePath
-	if spec.Channel == pb.Channel_CHANNEL_FUNDING {
+	if specification.Channel == manoochv1.Channel_CHANNEL_FUNDING {
 		path = fundingRatePath
 	}
-	data, recvNs, err := a.get(ctx, a.opts.RESTEndpoint+fmt.Sprintf(path, sym), maxRESTBodyBytes, spec.Channel, sym)
+	data, receivedNs, err := adapter.get(ctx, adapter.options.RESTEndpoint+fmt.Sprintf(path, symbol), maxRESTBodyBytes, specification.Channel, symbol)
 	if err != nil {
-		return nil, fmt.Errorf("kucoin: fetch %s: %w", spec, err)
+		return nil, fmt.Errorf("kucoin: fetch %s: %w", specification, err)
 	}
 
-	var cur currentValue
-	if err := json.Unmarshal(data, &cur); err != nil {
-		return nil, core.NewParseError(core.KindJSON, spec.Channel, sym, err, "response is not json")
+	var current currentValue
+	if err := json.Unmarshal(data, &current); err != nil {
+		return nil, core.NewParseError(core.KindJSON, specification.Channel, symbol, err, "response is not json")
 	}
-	exchangeNs, err := timestampNs(cur.TimePointMS)
+	exchangeNs, err := timestampNs(current.TimePointMS)
 	if err != nil {
-		return nil, core.NewParseError(core.KindField, spec.Channel, sym, err, "timePoint %d", cur.TimePointMS)
+		return nil, core.NewParseError(core.KindField, specification.Channel, symbol, err, "timePoint %d", current.TimePointMS)
 	}
 
-	msg, err := a.restMessage(spec, sym, cur, exchangeNs, recvNs)
+	message, err := adapter.restMessage(specification, symbol, current, exchangeNs, receivedNs)
 	if err != nil {
 		return nil, err
 	}
-	if msg == nil {
+	if message == nil {
 		return nil, nil
 	}
-	return []core.Message{*msg}, nil
+	return []core.Message{*message}, nil
 }
 
-// restMessage builds the one message the caller asked for. A nil message with a
-// nil error is a value the venue did not answer with, which is missing data
+// restMessage builds the one message the caller asked for. A nil message with
+// a nil error is a value the venue did not answer with, which is missing data
 // rather than a zero.
 //
-// The symbol comes from the spec, never from the response: the funding endpoint
-// answers with the index symbol (".XBTUSDTMFPI8H") rather than the contract's,
-// and mapping that back would fail or, worse, succeed onto the wrong key.
-func (a *Adapter) restMessage(spec core.StreamSpec, sym string, cur currentValue, exchangeNs, recvNs int64) (*core.Message, error) {
-	ref := spec.Instrument
-	instrument := ref.Proto(sym)
+// The symbol comes from the specification, never from the response: the
+// funding endpoint answers with the index symbol (".XBTUSDTMFPI8H") rather
+// than the contract's, and mapping that back would fail or, worse, succeed
+// onto the wrong key.
+func (adapter *Adapter) restMessage(specification core.StreamSpec, symbol string, current currentValue, exchangeNs, receivedNs int64) (*core.Message, error) {
+	reference := specification.Instrument
+	instrument := reference.Proto(symbol)
 
-	build := func(payload func(*pb.Envelope) proto.Message) *core.Message {
-		m := a.message(ref, instrument, spec.Channel, exchangeNs, recvNs, payload)
-		m.Proto.(interface{ GetEnv() *pb.Envelope }).GetEnv().Source = pb.Source_SOURCE_REST
-		return &m
+	build := func(payload func(*manoochv1.Envelope) proto.Message) *core.Message {
+		message := adapter.message(reference, instrument, specification.Channel, exchangeNs, receivedNs, payload)
+		message.Proto.(interface{ GetEnv() *manoochv1.Envelope }).GetEnv().Source = manoochv1.Source_SOURCE_REST
+		return &message
 	}
 
-	switch spec.Channel {
-	case pb.Channel_CHANNEL_MARK_PRICE:
-		v, err := price.ParsePrice(cur.Value.String())
+	switch specification.Channel {
+	case manoochv1.Channel_CHANNEL_MARK_PRICE:
+		v, err := price.ParsePrice(current.Value.String())
 		if err != nil {
-			return nil, numericError(spec.Channel, sym, "value", cur.Value.String(), err)
+			return nil, numericError(specification.Channel, symbol, "value", current.Value.String(), err)
 		}
-		return build(func(env *pb.Envelope) proto.Message {
-			return &pb.MarkPrice{Env: env, MarkPrice: int64(v)}
+		return build(func(envelope *manoochv1.Envelope) proto.Message {
+			return &manoochv1.MarkPrice{Env: envelope, MarkPrice: int64(v)}
 		}), nil
 
-	case pb.Channel_CHANNEL_INDEX_PRICE:
-		if cur.IndexPrice.String() == "" {
+	case manoochv1.Channel_CHANNEL_INDEX_PRICE:
+		if current.IndexPrice.String() == "" {
 			return nil, nil
 		}
-		v, err := price.ParsePrice(cur.IndexPrice.String())
+		v, err := price.ParsePrice(current.IndexPrice.String())
 		if err != nil {
-			return nil, numericError(spec.Channel, sym, "indexPrice", cur.IndexPrice.String(), err)
+			return nil, numericError(specification.Channel, symbol, "indexPrice", current.IndexPrice.String(), err)
 		}
-		return build(func(env *pb.Envelope) proto.Message {
-			return &pb.IndexPrice{Env: env, IndexPrice: int64(v)}
+		return build(func(envelope *manoochv1.Envelope) proto.Message {
+			return &manoochv1.IndexPrice{Env: envelope, IndexPrice: int64(v)}
 		}), nil
 
-	case pb.Channel_CHANNEL_FUNDING:
-		if cur.Value.String() == "" {
+	case manoochv1.Channel_CHANNEL_FUNDING:
+		if current.Value.String() == "" {
 			return nil, nil
 		}
-		v, err := price.ParseRate(cur.Value.String())
+		v, err := price.ParseRate(current.Value.String())
 		if err != nil {
-			return nil, numericError(spec.Channel, sym, "value", cur.Value.String(), err)
+			return nil, numericError(specification.Channel, symbol, "value", current.Value.String(), err)
 		}
 		// next_funding_time_ns stays zero here too. The venue answers with how
 		// long is left rather than when, and turning that into an absolute time
 		// would publish our clock as though it were the venue's.
-		return build(func(env *pb.Envelope) proto.Message {
-			return &pb.Funding{Env: env, FundingRate: int64(v)}
+		return build(func(envelope *manoochv1.Envelope) proto.Message {
+			return &manoochv1.Funding{Env: envelope, FundingRate: int64(v)}
 		}), nil
 	}
-	return nil, fmt.Errorf("kucoin: %s: channel %s is not served", spec, core.ChannelName(spec.Channel))
+	return nil, fmt.Errorf("kucoin: %s: channel %s is not served", specification, core.ChannelName(specification.Channel))
 }
 
 // get performs one public GET, unwraps KuCoin's envelope and returns the data
 // with the instant it landed.
 //
-// recvNs is stamped the moment the body is read and before anything looks at
-// it, for the same reason the websocket read loop stamps it there: measured
+// receivedNs is stamped the moment the body is read and before anything looks
+// at it, for the same reason the websocket read loop stamps it there: measured
 // after parsing it would fold our own work into the venue's latency.
-func (a *Adapter) get(ctx context.Context, url string, limit int64, ch pb.Channel, symbol string) ([]byte, int64, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+func (adapter *Adapter) get(ctx context.Context, url string, limit int64, channel manoochv1.Channel, symbol string) ([]byte, int64, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, 0, err
 	}
-	resp, err := a.opts.HTTPClient.Do(req)
+	response, err := adapter.options.HTTPClient.Do(request)
 	if err != nil {
 		return nil, 0, err
 	}
-	defer resp.Body.Close()
+	defer response.Body.Close()
 
-	body, readErr := io.ReadAll(io.LimitReader(resp.Body, limit))
-	recvNs := time.Now().UnixNano()
+	body, readErr := io.ReadAll(io.LimitReader(response.Body, limit))
+	receivedNs := time.Now().UnixNano()
 
 	if readErr != nil {
-		return nil, recvNs, readErr
+		return nil, receivedNs, readErr
 	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, recvNs, core.NewParseError(core.KindVenue, ch, symbol, nil,
-			"%s: %s", resp.Status, truncate(string(body), 200))
+	if response.StatusCode != http.StatusOK {
+		return nil, receivedNs, core.NewParseError(core.KindVenue, channel, symbol, nil,
+			"%s: %s", response.Status, truncate(string(body), 200))
 	}
 
-	var env restEnvelope
-	if err := json.Unmarshal(body, &env); err != nil {
-		return nil, recvNs, core.NewParseError(core.KindJSON, ch, symbol, err, "response is not json")
+	var envelope restEnvelope
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return nil, receivedNs, core.NewParseError(core.KindJSON, channel, symbol, err, "response is not json")
 	}
-	if env.Code != codeOK {
+	if envelope.Code != codeOK {
 		// A 200 with a rejection code inside it. Passing the venue's own code
 		// and message through is the difference between a fixable error and
 		// "the request worked but there was no data".
-		return nil, recvNs, core.NewParseError(core.KindVenue, ch, symbol, nil,
-			"code %s: %s", env.Code, truncate(env.Msg, 200))
+		return nil, receivedNs, core.NewParseError(core.KindVenue, channel, symbol, nil,
+			"code %s: %s", envelope.Code, truncate(envelope.Message, 200))
 	}
-	if len(env.Data) == 0 {
-		return nil, recvNs, core.NewParseError(core.KindField, ch, symbol, nil, "response carries no data")
+	if len(envelope.Data) == 0 {
+		return nil, receivedNs, core.NewParseError(core.KindField, channel, symbol, nil, "response carries no data")
 	}
-	return env.Data, recvNs, nil
+	return envelope.Data, receivedNs, nil
 }

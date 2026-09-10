@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"strings"
 
-	pb "github.com/you/manooch/gen/manoochv1"
+	"github.com/you/manooch/gen/manoochv1"
 	"github.com/you/manooch/internal/core"
 )
 
@@ -24,7 +24,7 @@ const (
 	// VenueScope is the market-type component of venue-wide keys.
 	VenueScope = "venue"
 
-	sep = ":"
+	separator = ":"
 )
 
 // Venue-wide subjects.
@@ -36,17 +36,17 @@ const (
 // venueSubjects is what each venue-wide subject carries. A key's subject is
 // the only thing that says what its bytes are, the same way a data key's
 // channel component is.
-var venueSubjects = map[string]pb.Channel{
-	SubjectHealth:    pb.Channel_CHANNEL_HEALTH,
-	SubjectRateLimit: pb.Channel_CHANNEL_RATELIMIT,
+var venueSubjects = map[string]manoochv1.Channel{
+	SubjectHealth:    manoochv1.Channel_CHANNEL_HEALTH,
+	SubjectRateLimit: manoochv1.Channel_CHANNEL_RATELIMIT,
 }
 
 // ChannelForSubject maps a venue-scoped key's subject to the channel whose
 // message type it holds. It exists for manooch-tap and manooch-status, which
 // are handed arbitrary keys by Redis and have nothing else to go on.
-func ChannelForSubject(subject string) (pb.Channel, bool) {
-	ch, ok := venueSubjects[subject]
-	return ch, ok
+func ChannelForSubject(subject string) (manoochv1.Channel, bool) {
+	channel, ok := venueSubjects[subject]
+	return channel, ok
 }
 
 var (
@@ -57,33 +57,33 @@ var (
 
 // Key builds the key for one stream, which is also its Pub/Sub channel name:
 // Redis keeps the two in separate namespaces, so one string is safely both.
-func Key(venue string, mt pb.MarketType, symbol string, ch pb.Channel) string {
-	var b strings.Builder
-	b.Grow(len(Prefix) + len(venue) + len(symbol) + 32)
-	b.WriteString(Prefix)
-	b.WriteString(sep)
-	b.WriteString(strings.ToUpper(venue))
-	b.WriteString(sep)
-	b.WriteString(core.MarketTypeName(mt))
-	b.WriteString(sep)
-	b.WriteString(strings.ToUpper(symbol))
-	b.WriteString(sep)
-	b.WriteString(core.ChannelName(ch))
-	return b.String()
+func Key(venue string, marketType manoochv1.MarketType, symbol string, channel manoochv1.Channel) string {
+	var builder strings.Builder
+	builder.Grow(len(Prefix) + len(venue) + len(symbol) + 32)
+	builder.WriteString(Prefix)
+	builder.WriteString(separator)
+	builder.WriteString(strings.ToUpper(venue))
+	builder.WriteString(separator)
+	builder.WriteString(core.MarketTypeName(marketType))
+	builder.WriteString(separator)
+	builder.WriteString(strings.ToUpper(symbol))
+	builder.WriteString(separator)
+	builder.WriteString(core.ChannelName(channel))
+	return builder.String()
 }
 
 // VenueKey builds a key about the venue connection rather than an instrument.
 func VenueKey(venue, subject string) string {
-	return Prefix + sep + strings.ToUpper(venue) + sep + VenueScope + sep + strings.ToLower(subject)
+	return Prefix + separator + strings.ToUpper(venue) + separator + VenueScope + separator + strings.ToLower(subject)
 }
 
 // MatchPattern is the SCAN/PSUBSCRIBE glob for one venue, or every venue when
 // venue is empty.
 func MatchPattern(venue string) string {
 	if venue == "" {
-		return Prefix + sep + "*"
+		return Prefix + separator + "*"
 	}
-	return Prefix + sep + strings.ToUpper(venue) + sep + "*"
+	return Prefix + separator + strings.ToUpper(venue) + separator + "*"
 }
 
 // KeyParts is a parsed key. Data consumers never call ParseKey — the instrument
@@ -91,9 +91,9 @@ func MatchPattern(venue string) string {
 // manooch-status are handed keys by Redis and have nothing else to go on.
 type KeyParts struct {
 	Venue      string
-	MarketType pb.MarketType
+	MarketType manoochv1.MarketType
 	Symbol     string
-	Channel    pb.Channel
+	Channel    manoochv1.Channel
 
 	// VenueScoped is true for Manooch:{VENUE}:venue:{subject} keys, where
 	// MarketType, Symbol and Channel are unset.
@@ -102,18 +102,18 @@ type KeyParts struct {
 }
 
 // String rebuilds the key, so ParseKey and Key round-trip.
-func (p KeyParts) String() string {
-	if p.VenueScoped {
-		return VenueKey(p.Venue, p.Subject)
+func (keyParts KeyParts) String() string {
+	if keyParts.VenueScoped {
+		return VenueKey(keyParts.Venue, keyParts.Subject)
 	}
-	return Key(p.Venue, p.MarketType, p.Symbol, p.Channel)
+	return Key(keyParts.Venue, keyParts.MarketType, keyParts.Symbol, keyParts.Channel)
 }
 
 // ParseKey splits a key and validates every component. An unrecognised key was
 // either written by something else or written by us wrongly; both are worth an
 // error rather than a best guess.
 func ParseKey(s string) (KeyParts, error) {
-	parts := strings.Split(s, sep)
+	parts := strings.Split(s, separator)
 	if len(parts) < 4 || len(parts) > 5 {
 		return KeyParts{}, fmt.Errorf("key %q: want %s:{VENUE}:{MARKET_TYPE}:{SYMBOL}:{channel}", s, Prefix)
 	}
@@ -123,7 +123,7 @@ func ParseKey(s string) (KeyParts, error) {
 	if !venueRe.MatchString(parts[1]) {
 		return KeyParts{}, fmt.Errorf("key %q: venue %q must be upper case", s, parts[1])
 	}
-	kp := KeyParts{Venue: parts[1]}
+	keyParts := KeyParts{Venue: parts[1]}
 
 	if parts[2] == VenueScope {
 		if len(parts) != 4 {
@@ -132,32 +132,32 @@ func ParseKey(s string) (KeyParts, error) {
 		if !subjectRe.MatchString(parts[3]) {
 			return KeyParts{}, fmt.Errorf("key %q: subject %q must be lower snake case", s, parts[3])
 		}
-		kp.VenueScoped = true
-		kp.Subject = parts[3]
-		return kp, nil
+		keyParts.VenueScoped = true
+		keyParts.Subject = parts[3]
+		return keyParts, nil
 	}
 
 	if len(parts) != 5 {
 		return KeyParts{}, fmt.Errorf("key %q: want 5 components, got %d", s, len(parts))
 	}
-	mt, err := core.ParseMarketType(parts[2])
+	marketType, err := core.ParseMarketType(parts[2])
 	if err != nil {
 		return KeyParts{}, fmt.Errorf("key %q: %w", s, err)
 	}
-	if core.MarketTypeName(mt) != parts[2] {
+	if core.MarketTypeName(marketType) != parts[2] {
 		return KeyParts{}, fmt.Errorf("key %q: market type %q must be upper case", s, parts[2])
 	}
 	if !symbolRe.MatchString(parts[3]) {
 		return KeyParts{}, fmt.Errorf("key %q: symbol %q must match %s", s, parts[3], core.CanonicalPattern)
 	}
-	ch, err := core.ParseChannel(parts[4])
+	channel, err := core.ParseChannel(parts[4])
 	if err != nil {
 		return KeyParts{}, fmt.Errorf("key %q: %w", s, err)
 	}
-	if core.ChannelName(ch) != parts[4] {
+	if core.ChannelName(channel) != parts[4] {
 		return KeyParts{}, fmt.Errorf("key %q: channel %q must be lower snake case", s, parts[4])
 	}
 
-	kp.MarketType, kp.Symbol, kp.Channel = mt, parts[3], ch
-	return kp, nil
+	keyParts.MarketType, keyParts.Symbol, keyParts.Channel = marketType, parts[3], channel
+	return keyParts, nil
 }

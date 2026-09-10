@@ -4,16 +4,17 @@ import (
 	"context"
 	"time"
 
-	pb "github.com/you/manooch/gen/manoochv1"
+	"github.com/you/manooch/gen/manoochv1"
 	"github.com/you/manooch/internal/publish"
 )
 
-// healthTTLMultiple is how many heartbeats a health key survives without one.
+// healthTimeToLiveMultiple is how many heartbeats a health key survives
+// without one.
 //
 // The health channel has to be detectably dead itself. If the publisher stops,
 // its own key expires and a consumer sees that; without a TTL here, the last
 // health message ever published would sit in Redis looking current forever.
-const healthTTLMultiple = 3
+const healthTimeToLiveMultiple = 3
 
 // Run publishes health until ctx ends.
 //
@@ -24,31 +25,31 @@ const healthTTLMultiple = 3
 // The tick also recomputes every stream, which is how the purely time-based
 // transitions happen — fallback crossing its maximum duration is one no event
 // fires for.
-func (t *Tracker) Run(ctx context.Context) {
-	tick := time.NewTicker(t.opts.HeartbeatInterval)
+func (tracker *Tracker) Run(ctx context.Context) {
+	tick := time.NewTicker(tracker.options.HeartbeatInterval)
 	defer tick.Stop()
 
-	t.beat(ctx)
+	tracker.beat(ctx)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
-			t.beat(ctx)
+			tracker.beat(ctx)
 		}
 	}
 }
 
 // beat refreshes every stream and publishes the whole set.
-func (t *Tracker) beat(ctx context.Context) {
-	t.mu.Lock()
+func (tracker *Tracker) beat(ctx context.Context) {
+	tracker.mutex.Lock()
 	// The transitions refresh returns are discarded: snapshotAll republishes
 	// every key anyway, and the heartbeat is what proves the publisher alive.
-	t.refresh(t.order)
-	msgs := t.snapshotAll()
-	t.mu.Unlock()
+	tracker.refresh(tracker.order)
+	messages := tracker.snapshotAll()
+	tracker.mutex.Unlock()
 
-	t.write(ctx, msgs)
+	tracker.write(ctx, messages)
 }
 
 // ---------- snapshots ----------
@@ -56,17 +57,17 @@ func (t *Tracker) beat(ctx context.Context) {
 // A snapshot is one health message ready to publish, taken under the mutex so
 // the Redis write happens outside it.
 type snapshot struct {
-	key string
-	msg *pb.Health
+	key     string
+	message *manoochv1.Health
 }
 
 // snapshotAll is every instrument plus the venue. Callers hold the mutex.
-func (t *Tracker) snapshotAll() []snapshot {
-	out := make([]snapshot, 0, len(t.order)+1)
-	for _, in := range t.order {
-		out = append(out, t.snapshotInstrument(in))
+func (tracker *Tracker) snapshotAll() []snapshot {
+	out := make([]snapshot, 0, len(tracker.order)+1)
+	for _, instrument := range tracker.order {
+		out = append(out, tracker.snapshotInstrument(instrument))
 	}
-	return append(out, t.snapshotVenue())
+	return append(out, tracker.snapshotVenue())
 }
 
 // snapshotInstrument builds one instrument's health message. Callers hold the
@@ -75,83 +76,83 @@ func (t *Tracker) snapshotAll() []snapshot {
 // The message carries the worst of the instrument's channels. Per-channel
 // status is not lost by that: every data key's own envelope carries its own
 // status and reason, which is what a consumer reading a price sees first.
-func (t *Tracker) snapshotInstrument(in *instrument) snapshot {
+func (tracker *Tracker) snapshotInstrument(instrument *instrument) snapshot {
 	var (
 		oldest      time.Time
 		restarts    uint32
 		onFallback  bool
 		anyReceived bool
 	)
-	for _, s := range in.streams {
-		restarts += s.restarts
-		if !s.fallbackSince.IsZero() {
+	for _, stream := range instrument.streams {
+		restarts += stream.restarts
+		if !stream.fallbackSince.IsZero() {
 			onFallback = true
 		}
-		if s.lastMessage.IsZero() {
+		if stream.lastMessage.IsZero() {
 			continue
 		}
-		if !anyReceived || s.lastMessage.Before(oldest) {
-			oldest, anyReceived = s.lastMessage, true
+		if !anyReceived || stream.lastMessage.Before(oldest) {
+			oldest, anyReceived = stream.lastMessage, true
 		}
 	}
 
 	// Age is the oldest of the instrument's channels: the freshest one says
 	// nothing about whether the other two are still arriving. Minus one is
 	// "nothing has ever arrived", which is not the same as "arrived just now".
-	var ageMS int64 = -1
+	var ageMilliseconds int64 = -1
 	if anyReceived {
-		ageMS = t.now().Sub(oldest).Milliseconds()
+		ageMilliseconds = tracker.now().Sub(oldest).Milliseconds()
 	}
 
-	env := &pb.Envelope{
-		Venue:      t.opts.Venue,
-		Instrument: in.ref.Proto(in.venueSymbol),
-		Channel:    pb.Channel_CHANNEL_HEALTH,
+	envelope := &manoochv1.Envelope{
+		Venue:      tracker.options.Venue,
+		Instrument: instrument.reference.Proto(instrument.venueSymbol),
+		Channel:    manoochv1.Channel_CHANNEL_HEALTH,
 		// No exchange time: nothing here came from the venue.
 		RecvTimeNs:   oldest.UnixNano(),
-		Source:       pb.Source_SOURCE_WEBSOCKET,
-		Status:       in.status,
-		StatusReason: in.reason,
+		Source:       manoochv1.Source_SOURCE_WEBSOCKET,
+		Status:       instrument.status,
+		StatusReason: instrument.reason,
 	}
 	if onFallback {
-		env.Source = pb.Source_SOURCE_REST
+		envelope.Source = manoochv1.Source_SOURCE_REST
 	}
 	if !anyReceived {
-		env.RecvTimeNs = 0
+		envelope.RecvTimeNs = 0
 	}
 
-	return snapshot{key: in.key, msg: &pb.Health{
-		Env:                env,
-		Status:             in.status,
-		Reason:             in.reason,
-		LastMessageAgeMs:   ageMS,
-		ReconnectCount:     t.reconnects,
+	return snapshot{key: instrument.key, message: &manoochv1.Health{
+		Env:                envelope,
+		Status:             instrument.status,
+		Reason:             instrument.reason,
+		LastMessageAgeMs:   ageMilliseconds,
+		ReconnectCount:     tracker.reconnects,
 		StreamRestartCount: restarts,
 		FallbackActive:     onFallback,
-		ClockSkewMs:        t.skewMS,
-		LeakedGoroutines:   uint32(t.leaked),
+		ClockSkewMs:        tracker.skewMS,
+		LeakedGoroutines:   uint32(tracker.leaked),
 	}}
 }
 
 // snapshotVenue builds the connection-level message: socket state, clock skew
 // and leaked goroutines, none of which belong to any one stream. Callers hold
 // the mutex.
-func (t *Tracker) snapshotVenue() snapshot {
+func (tracker *Tracker) snapshotVenue() snapshot {
 	return snapshot{
-		key: publish.VenueKey(t.opts.Venue, publish.SubjectHealth),
-		msg: &pb.Health{
-			Env: &pb.Envelope{
-				Venue:        t.opts.Venue,
-				Channel:      pb.Channel_CHANNEL_HEALTH,
-				Status:       t.venueStatus,
-				StatusReason: t.venueReason,
+		key: publish.VenueKey(tracker.options.Venue, publish.SubjectHealth),
+		message: &manoochv1.Health{
+			Env: &manoochv1.Envelope{
+				Venue:        tracker.options.Venue,
+				Channel:      manoochv1.Channel_CHANNEL_HEALTH,
+				Status:       tracker.venueStatus,
+				StatusReason: tracker.venueReason,
 			},
-			Status:           t.venueStatus,
-			Reason:           t.venueReason,
+			Status:           tracker.venueStatus,
+			Reason:           tracker.venueReason,
 			LastMessageAgeMs: -1,
-			ReconnectCount:   t.reconnects,
-			ClockSkewMs:      t.skewMS,
-			LeakedGoroutines: uint32(t.leaked),
+			ReconnectCount:   tracker.reconnects,
+			ClockSkewMs:      tracker.skewMS,
+			LeakedGoroutines: uint32(tracker.leaked),
 		},
 	}
 }
@@ -159,10 +160,10 @@ func (t *Tracker) snapshotVenue() snapshot {
 // write publishes a batch of snapshots. A failed health write is already
 // counted and rate-limit logged by the publisher; there is nothing useful to do
 // about it here, and the key expiring is itself the signal.
-func (t *Tracker) write(ctx context.Context, msgs []snapshot) {
-	ttl := t.opts.HeartbeatInterval * healthTTLMultiple
-	for _, m := range msgs {
-		if m.msg.Env.Status == pb.Status_STATUS_UNSPECIFIED {
+func (tracker *Tracker) write(ctx context.Context, messages []snapshot) {
+	timeToLive := tracker.options.HeartbeatInterval * healthTimeToLiveMultiple
+	for _, snapshot := range messages {
+		if snapshot.message.Env.Status == manoochv1.Status_STATUS_UNSPECIFIED {
 			// Nothing has reported yet. Publishing a status of "unknown" is
 			// worse than publishing nothing: the key's presence would claim
 			// the publisher is alive and its content would say nothing.
@@ -170,6 +171,6 @@ func (t *Tracker) write(ctx context.Context, msgs []snapshot) {
 		}
 		// The snapshot was built fresh under the mutex, so the publisher owns
 		// the envelope it is about to stamp and nothing else holds it.
-		_ = t.opts.Publisher.Publish(ctx, m.key, m.msg, ttl)
+		_ = tracker.options.Publisher.Publish(ctx, snapshot.key, snapshot.message, timeToLive)
 	}
 }

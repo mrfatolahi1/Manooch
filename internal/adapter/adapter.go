@@ -15,11 +15,11 @@ import (
 	"github.com/you/manooch/internal/ratelimit"
 )
 
-// Deps are the process-level collaborators a venue package is handed. They are
-// process-level rather than per-adapter because the venue's budget is: two
-// adapters with a limiter each would each stay inside a limit they were both
-// spending.
-type Deps struct {
+// Dependencies are the process-level collaborators a venue package is handed.
+// They are process-level rather than per-adapter because the venue's budget is:
+// two adapters with a limiter each would each stay inside a limit they were
+// both spending.
+type Dependencies struct {
 	// Limiter budgets REST weight and websocket connects. Zero means
 	// ratelimit.Unlimited.
 	Limiter ratelimit.Limiter
@@ -27,7 +27,7 @@ type Deps struct {
 
 // builders maps a venue name to its constructor. A venue package never reads
 // config itself — it is handed resolved values — so the translation lives here.
-var builders = map[string]func(*config.Config, Deps) (core.Adapter, error){
+var builders = map[string]func(*config.Config, Dependencies) (core.Adapter, error){
 	binance.Venue: newBinance,
 	kucoin.Venue:  newKuCoin,
 }
@@ -40,30 +40,31 @@ func Venues() []string { return slices.Sorted(maps.Keys(builders)) }
 // An unknown venue is a startup error naming it and what is available: a
 // process that starts against a venue it cannot serve would sit there
 // publishing nothing, which looks exactly like a venue that went quiet.
-func New(cfg *config.Config, deps Deps) (core.Adapter, error) {
-	build, ok := builders[cfg.Venue]
+func New(configuration *config.Config, dependencies Dependencies) (core.Adapter, error) {
+	build, ok := builders[configuration.Venue]
 	if !ok {
-		return nil, fmt.Errorf("no adapter for venue %q; this build serves %v", cfg.Venue, Venues())
+		return nil, fmt.Errorf("no adapter for venue %q; this build serves %v", configuration.Venue, Venues())
 	}
-	if deps.Limiter == nil {
-		deps.Limiter = ratelimit.Unlimited{}
+	if dependencies.Limiter == nil {
+		dependencies.Limiter = ratelimit.Unlimited{}
 	}
-	return build(cfg, deps)
+	return build(configuration, dependencies)
 }
 
-// Specs expands the config's streams into the adapter's unit of work. It is
-// here rather than in config because StreamSpec is the adapter boundary's type.
-func Specs(cfg *config.Config) ([]core.StreamSpec, error) {
-	streams := cfg.Streams()
-	specs := make([]core.StreamSpec, 0, len(streams))
-	for _, s := range streams {
-		ref, err := core.ParseCanonical(s.Symbol, s.MarketType)
+// Specifications expands the config's streams into the adapter's unit of work.
+// It is here rather than in config because StreamSpec is the adapter boundary's
+// type.
+func Specifications(configuration *config.Config) ([]core.StreamSpec, error) {
+	streams := configuration.Streams()
+	specifications := make([]core.StreamSpec, 0, len(streams))
+	for _, stream := range streams {
+		reference, err := core.ParseCanonical(stream.Symbol, stream.MarketType)
 		if err != nil {
 			return nil, err
 		}
-		specs = append(specs, core.StreamSpec{Instrument: ref, Channel: s.Channel})
+		specifications = append(specifications, core.StreamSpec{Instrument: reference, Channel: stream.Channel})
 	}
-	return specs, nil
+	return specifications, nil
 }
 
 // newKuCoin builds the KuCoin adapter.
@@ -71,28 +72,28 @@ func Specs(cfg *config.Config) ([]core.StreamSpec, error) {
 // endpoints.ws holds the bullet host rather than a socket address: KuCoin does
 // not let you dial the socket directly, and the address is only knowable once
 // the bullet call has answered. See adapter-kucoin.md.
-func newKuCoin(cfg *config.Config, deps Deps) (core.Adapter, error) {
-	mt := core.MarketTypeName(kucoin.MarketType)
+func newKuCoin(configuration *config.Config, dependencies Dependencies) (core.Adapter, error) {
+	marketType := core.MarketTypeName(kucoin.MarketType)
 	return kucoin.New(kucoin.Options{
-		WSEndpoint:          cfg.Endpoints.WS[mt],
-		RESTEndpoint:        cfg.Endpoints.REST[mt],
-		SymbolOverrides:     cfg.SymbolOverrides,
-		MaxStreamsPerSocket: cfg.Connection.MaxStreamsPerSocket,
-		ReadTimeout:         cfg.Connection.ReadTimeout.Std(),
-		TTLs:                cfg.TTLs(),
-		Limiter:             deps.Limiter,
+		WebSocketEndpoint:   configuration.Endpoints.WebSocket[marketType],
+		RESTEndpoint:        configuration.Endpoints.REST[marketType],
+		SymbolOverrides:     configuration.SymbolOverrides,
+		MaxStreamsPerSocket: configuration.Connection.MaxStreamsPerSocket,
+		ReadTimeout:         configuration.Connection.ReadTimeout.Standard(),
+		TimeToLive:          configuration.TimeToLiveByChannel(),
+		Limiter:             dependencies.Limiter,
 	})
 }
 
-func newBinance(cfg *config.Config, deps Deps) (core.Adapter, error) {
-	mt := core.MarketTypeName(binance.MarketType)
+func newBinance(configuration *config.Config, dependencies Dependencies) (core.Adapter, error) {
+	marketType := core.MarketTypeName(binance.MarketType)
 	return binance.New(binance.Options{
-		WSEndpoint:          cfg.Endpoints.WS[mt],
-		RESTEndpoint:        cfg.Endpoints.REST[mt],
-		SymbolOverrides:     cfg.SymbolOverrides,
-		MaxStreamsPerSocket: cfg.Connection.MaxStreamsPerSocket,
-		ReadTimeout:         cfg.Connection.ReadTimeout.Std(),
-		TTLs:                cfg.TTLs(),
-		Limiter:             deps.Limiter,
+		WebSocketEndpoint:   configuration.Endpoints.WebSocket[marketType],
+		RESTEndpoint:        configuration.Endpoints.REST[marketType],
+		SymbolOverrides:     configuration.SymbolOverrides,
+		MaxStreamsPerSocket: configuration.Connection.MaxStreamsPerSocket,
+		ReadTimeout:         configuration.Connection.ReadTimeout.Standard(),
+		TimeToLive:          configuration.TimeToLiveByChannel(),
+		Limiter:             dependencies.Limiter,
 	})
 }

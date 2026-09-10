@@ -4,7 +4,7 @@ Loads `defaults.yaml` and one venue file, merges them, and returns a validated `
 
 | File | Holds |
 |---|---|
-| `config.go` | Config structs, the `Duration` YAML type, `Cadence` / `TTL` / `TTLs` / `Streams` |
+| `config.go` | Config structs, the `Duration` YAML type, `Cadence` / `TimeToLive` / `TimeToLiveByChannel` / `Streams` |
 | `load.go` | `Load`, strict decoding, the provenance map, every validation rule |
 | `load_test.go` | `TestLoadValid`, `TestLoadInvalid` (walks the golden cases), `TestLoadMissingVenueFile` |
 | `testdata/valid/` | A config that loads; the base for every invalid case |
@@ -19,7 +19,7 @@ Both files decode onto the **same** `Config` value. `yaml.v3` only writes keys p
 
 Struct-tag validation runs first (`RegisterTagNameFunc` makes messages name the YAML key, not the Go field), then the semantic rules — scales against `pkg/price`, loopback `http.listen`, clock-skew ordering, endpoint schemes, symbol patterns, cadence coverage, channel/market-type compatibility. Everything routes through `provenance.errf` to produce `<file>: <key path>: <message>`, and all errors are collected with `errors.Join` so one run reports every problem.
 
-`resolveInstruments` runs last and fills `InstrumentConfig.MT` and `.Chans`, so those are only populated on a config that passed.
+`resolveInstruments` runs last and fills `InstrumentConfig.ResolvedMarketType` and `.ResolvedChannels`, so those are only populated on a config that passed.
 
 ## Per-channel cadence
 
@@ -32,7 +32,7 @@ about all of them:
 | `index_price` | `1s` | `10s` | 30s |
 | `funding` | `1s` | `60s` | 180s |
 
-`Config.TTL(ch)` is that cadence times `health.ttl_multiplier`; `Config.TTLs()`
+`Config.TimeToLive(channel)` is that cadence times `health.ttl_multiplier`; `Config.TimeToLiveByChannel()`
 returns the whole map, which is what an adapter is handed.
 
 Per channel rather than per venue because KuCoin pushes funding once a minute

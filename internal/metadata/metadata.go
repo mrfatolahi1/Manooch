@@ -21,7 +21,7 @@ import (
 	"sync"
 	"time"
 
-	pb "github.com/you/manooch/gen/manoochv1"
+	"github.com/you/manooch/gen/manoochv1"
 	"github.com/you/manooch/internal/core"
 	"github.com/you/manooch/internal/publish"
 	"github.com/you/manooch/internal/transport"
@@ -66,7 +66,7 @@ type Options struct {
 	Instruments []core.InstrumentRef
 
 	// MarketType is the market to fetch. One per process, like everything else.
-	MarketType pb.MarketType
+	MarketType manoochv1.MarketType
 
 	// Interval is how often metadata is refetched. The key's TTL is twice it.
 	Interval time.Duration
@@ -87,58 +87,58 @@ type Options struct {
 
 // A Refresher fetches and republishes instrument metadata on an interval.
 type Refresher struct {
-	opts Options
-	now  func() time.Time
+	options Options
+	now     func() time.Time
 
 	// ready closes once the first fetch has succeeded. It is a channel rather
 	// than a flag because the daemon parks on it before it starts streaming.
 	ready     chan struct{}
 	readyOnce sync.Once
 
-	mu   sync.Mutex
-	last map[string]*pb.InstrumentMeta // canonical symbol -> last published
+	mutex sync.Mutex
+	last  map[string]*manoochv1.InstrumentMeta // canonical symbol -> last published
 }
 
 // New builds a refresher. It fetches nothing until Run.
-func New(opts Options) (*Refresher, error) {
+func New(options Options) (*Refresher, error) {
 	switch {
-	case opts.Venue == "":
+	case options.Venue == "":
 		return nil, errors.New("metadata: no venue")
-	case opts.Adapter == nil:
+	case options.Adapter == nil:
 		return nil, errors.New("metadata: no adapter")
-	case opts.Publisher == nil:
+	case options.Publisher == nil:
 		return nil, errors.New("metadata: no publisher")
-	case opts.Log == nil:
+	case options.Log == nil:
 		return nil, errors.New("metadata: no logger")
-	case len(opts.Instruments) == 0:
+	case len(options.Instruments) == 0:
 		return nil, errors.New("metadata: no instruments")
-	case opts.Interval <= 0:
-		return nil, fmt.Errorf("metadata: refresh interval is %v", opts.Interval)
-	case opts.FetchTimeout <= 0:
-		return nil, fmt.Errorf("metadata: fetch timeout is %v", opts.FetchTimeout)
+	case options.Interval <= 0:
+		return nil, fmt.Errorf("metadata: refresh interval is %v", options.Interval)
+	case options.FetchTimeout <= 0:
+		return nil, fmt.Errorf("metadata: fetch timeout is %v", options.FetchTimeout)
 	}
-	if opts.Now == nil {
-		opts.Now = time.Now
+	if options.Now == nil {
+		options.Now = time.Now
 	}
 	return &Refresher{
-		opts:  opts,
-		now:   opts.Now,
-		ready: make(chan struct{}),
-		last:  map[string]*pb.InstrumentMeta{},
+		options: options,
+		now:     options.Now,
+		ready:   make(chan struct{}),
+		last:    map[string]*manoochv1.InstrumentMeta{},
 	}, nil
 }
 
 // Ready closes once the first fetch has succeeded.
-func (r *Refresher) Ready() <-chan struct{} { return r.ready }
+func (refresher *Refresher) Ready() <-chan struct{} { return refresher.ready }
 
 // WaitReady blocks until metadata has arrived, reporting false if ctx ended
 // first. It returns immediately when metadata is not a startup requirement.
-func (r *Refresher) WaitReady(ctx context.Context) bool {
-	if !r.opts.Required {
+func (refresher *Refresher) WaitReady(ctx context.Context) bool {
+	if !refresher.options.Required {
 		return ctx.Err() == nil
 	}
 	select {
-	case <-r.ready:
+	case <-refresher.ready:
 		return true
 	case <-ctx.Done():
 		return false
@@ -155,18 +155,18 @@ func (r *Refresher) WaitReady(ctx context.Context) bool {
 // resetting a key's TTL from a fetch that did not happen would claim a
 // freshness nobody has. The key expires after two missed cycles and that
 // absence is the signal.
-func (r *Refresher) Run(ctx context.Context) {
-	r.report(false, unavailable)
+func (refresher *Refresher) Run(ctx context.Context) {
+	refresher.report(false, unavailable)
 
 	for attempt := 0; ctx.Err() == nil; attempt++ {
-		if err := r.refresh(ctx); err != nil {
+		if err := refresher.refresh(ctx); err != nil {
 			if ctx.Err() != nil {
 				return
 			}
-			r.opts.Log.Error("metadata unavailable, the venue is publishing nothing",
+			refresher.options.Log.Error("metadata unavailable, the venue is publishing nothing",
 				"attempt", attempt+1, "error", err.Error())
-			r.report(false, unavailable)
-			if !r.opts.Backoff.Sleep(ctx, attempt) {
+			refresher.report(false, unavailable)
+			if !refresher.options.Backoff.Sleep(ctx, attempt) {
 				return
 			}
 			continue
@@ -177,20 +177,20 @@ func (r *Refresher) Run(ctx context.Context) {
 		return
 	}
 
-	r.report(true, "")
-	r.readyOnce.Do(func() { close(r.ready) })
+	refresher.report(true, "")
+	refresher.readyOnce.Do(func() { close(refresher.ready) })
 
-	tick := time.NewTicker(r.opts.Interval)
+	tick := time.NewTicker(refresher.options.Interval)
 	defer tick.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
-			if err := r.refresh(ctx); err != nil && ctx.Err() == nil {
+			if err := refresher.refresh(ctx); err != nil && ctx.Err() == nil {
 				// Held, not escalated: the prices are still arriving and what
 				// we published last cycle is still inside its TTL.
-				r.opts.Log.Error("metadata refresh failed, keeping the last values until they expire",
+				refresher.options.Log.Error("metadata refresh failed, keeping the last values until they expire",
 					"error", err.Error())
 			}
 		}
@@ -202,55 +202,55 @@ func (r *Refresher) Run(ctx context.Context) {
 // The whole set goes out every cycle rather than only what changed: Pub/Sub is
 // fire-and-forget, and a consumer that missed the one message announcing a tick
 // size change would never hear about it again.
-func (r *Refresher) refresh(ctx context.Context) error {
-	fetchCtx, cancel := context.WithTimeout(ctx, r.opts.FetchTimeout)
+func (refresher *Refresher) refresh(ctx context.Context) error {
+	fetchCtx, cancel := context.WithTimeout(ctx, refresher.options.FetchTimeout)
 	defer cancel()
 
-	metas, err := r.opts.Adapter.FetchMetadata(fetchCtx, r.opts.MarketType)
+	metadataList, err := refresher.options.Adapter.FetchMetadata(fetchCtx, refresher.options.MarketType)
 	if err != nil {
 		return err
 	}
 
-	byCanonical := make(map[string]*pb.InstrumentMeta, len(metas))
-	for _, m := range metas {
-		if m.GetEnv().GetInstrument() == nil {
+	byCanonical := make(map[string]*manoochv1.InstrumentMeta, len(metadataList))
+	for _, metadata := range metadataList {
+		if metadata.GetEnv().GetInstrument() == nil {
 			continue
 		}
-		byCanonical[m.Env.Instrument.Canonical] = m
+		byCanonical[metadata.Env.Instrument.Canonical] = metadata
 	}
 
 	var (
 		missing []string
-		found   []*pb.InstrumentMeta
+		found   []*manoochv1.InstrumentMeta
 	)
-	for _, ref := range r.opts.Instruments {
-		m, ok := byCanonical[ref.Canonical()]
+	for _, reference := range refresher.options.Instruments {
+		metadata, ok := byCanonical[reference.Canonical()]
 		if !ok {
-			missing = append(missing, ref.Canonical())
+			missing = append(missing, reference.Canonical())
 			continue
 		}
-		found = append(found, m)
+		found = append(found, metadata)
 	}
 	if len(found) == 0 {
-		return fmt.Errorf("metadata: the venue lists none of the %d configured instruments", len(r.opts.Instruments))
+		return fmt.Errorf("metadata: the venue lists none of the %d configured instruments", len(refresher.options.Instruments))
 	}
 	if len(missing) > 0 {
 		// Not fatal, but it means those streams will never produce data, and
 		// nothing else in the service would say so.
-		r.opts.Log.Warn("metadata: the venue does not list these instruments",
-			"symbols", missing, "market_type", core.MarketTypeName(r.opts.MarketType))
+		refresher.options.Log.Warn("metadata: the venue does not list these instruments",
+			"symbols", missing, "market_type", core.MarketTypeName(refresher.options.MarketType))
 	}
 
-	ttl := r.opts.Interval * ttlMultiple
-	for _, m := range found {
-		canonical := m.Env.Instrument.Canonical
-		r.logChanges(canonical, m)
+	timeToLive := refresher.options.Interval * ttlMultiple
+	for _, metadata := range found {
+		canonical := metadata.Env.Instrument.Canonical
+		refresher.logChanges(canonical, metadata)
 
-		key := publish.Key(r.opts.Venue, m.Env.Instrument.MarketType, canonical, pb.Channel_CHANNEL_METADATA)
-		if err := r.opts.Publisher.Publish(ctx, key, m, ttl); err != nil {
+		key := publish.Key(refresher.options.Venue, metadata.Env.Instrument.MarketType, canonical, manoochv1.Channel_CHANNEL_METADATA)
+		if err := refresher.options.Publisher.Publish(ctx, key, metadata, timeToLive); err != nil {
 			return err
 		}
-		r.remember(canonical, m)
+		refresher.remember(canonical, metadata)
 	}
 	return nil
 }
@@ -265,8 +265,8 @@ func (r *Refresher) refresh(ctx context.Context) error {
 // is global — 1e-11 for price, 1e-8 for size — so tick size is a fact about the
 // instrument rather than the exponent anything was encoded at. That is the
 // whole reason the global scale was chosen over a per-instrument one.
-func (r *Refresher) logChanges(canonical string, next *pb.InstrumentMeta) {
-	prev := r.previous(canonical)
+func (refresher *Refresher) logChanges(canonical string, next *manoochv1.InstrumentMeta) {
+	prev := refresher.previous(canonical)
 	if prev == nil {
 		return
 	}
@@ -283,12 +283,12 @@ func (r *Refresher) logChanges(canonical string, next *pb.InstrumentMeta) {
 		if f.prev == f.next {
 			continue
 		}
-		r.opts.Log.Warn("instrument metadata changed",
+		refresher.options.Log.Warn("instrument metadata changed",
 			"symbol", canonical, "field", f.name,
 			"from", f.render(f.prev), "to", f.render(f.next))
 	}
 	if prev.Active != next.Active {
-		r.opts.Log.Warn("instrument metadata changed",
+		refresher.options.Log.Warn("instrument metadata changed",
 			"symbol", canonical, "field", "active", "from", prev.Active, "to", next.Active)
 	}
 }
@@ -298,23 +298,23 @@ func (r *Refresher) logChanges(canonical string, next *pb.InstrumentMeta) {
 func renderPrice(v int64) string { return price.Price(v).String() }
 func renderSize(v int64) string  { return price.Size(v).String() }
 
-func (r *Refresher) previous(canonical string) *pb.InstrumentMeta {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.last[canonical]
+func (refresher *Refresher) previous(canonical string) *manoochv1.InstrumentMeta {
+	refresher.mutex.Lock()
+	defer refresher.mutex.Unlock()
+	return refresher.last[canonical]
 }
 
-func (r *Refresher) remember(canonical string, m *pb.InstrumentMeta) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.last[canonical] = m
+func (refresher *Refresher) remember(canonical string, metadata *manoochv1.InstrumentMeta) {
+	refresher.mutex.Lock()
+	defer refresher.mutex.Unlock()
+	refresher.last[canonical] = metadata
 }
 
 // report tells health whether metadata is available, when there is a health
 // tracker to tell.
-func (r *Refresher) report(ok bool, reason string) {
-	if r.opts.Health == nil {
+func (refresher *Refresher) report(ok bool, reason string) {
+	if refresher.options.Health == nil {
 		return
 	}
-	r.opts.Health.MetadataState(ok, reason)
+	refresher.options.Health.MetadataState(ok, reason)
 }

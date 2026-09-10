@@ -42,23 +42,23 @@ type pingingConn struct {
 	closed chan struct{}
 	done   chan struct{}
 
-	// seq numbers the pings. KuCoin wants an id per frame and echoes it back
+	// sequence numbers the pings. KuCoin wants an id per frame and echoes it back
 	// on the pong; a counter is enough and, unlike a timestamp, cannot repeat.
-	seq atomic.Int64
+	sequence atomic.Int64
 }
 
 var _ core.Conn = (*pingingConn)(nil)
 
 // newPingingConn wraps a connection and starts pinging it.
-func newPingingConn(conn core.Conn, interval time.Duration) *pingingConn {
-	c := &pingingConn{
-		Conn:     conn,
+func newPingingConn(connection core.Conn, interval time.Duration) *pingingConn {
+	pinging := &pingingConn{
+		Conn:     connection,
 		interval: interval,
 		closed:   make(chan struct{}),
 		done:     make(chan struct{}),
 	}
-	go c.run()
-	return c
+	go pinging.run()
+	return pinging
 }
 
 // run pings until the connection is closed.
@@ -67,22 +67,22 @@ func newPingingConn(conn core.Conn, interval time.Duration) *pingingConn {
 // already gone at that point, and closing is what unblocks the read loop above
 // and starts the reconnect — where silently retrying would leave a connection
 // that is up, silent, and about to be dropped by the venue for missing pings.
-func (c *pingingConn) run() {
-	defer close(c.done)
+func (connection *pingingConn) run() {
+	defer close(connection.done)
 
-	if c.interval <= 0 {
+	if connection.interval <= 0 {
 		return
 	}
-	tick := time.NewTicker(c.interval)
+	tick := time.NewTicker(connection.interval)
 	defer tick.Stop()
 
 	for {
 		select {
-		case <-c.closed:
+		case <-connection.closed:
 			return
 		case <-tick.C:
-			if err := c.ping(); err != nil {
-				_ = c.Close()
+			if err := connection.ping(); err != nil {
+				_ = connection.Close()
 				return
 			}
 		}
@@ -90,9 +90,9 @@ func (c *pingingConn) run() {
 }
 
 // ping writes one keepalive frame.
-func (c *pingingConn) ping() error {
+func (connection *pingingConn) ping() error {
 	b, err := json.Marshal(pingRequest{
-		ID:   "ping-" + strconv.FormatInt(c.seq.Add(1), 10),
+		ID:   "ping-" + strconv.FormatInt(connection.sequence.Add(1), 10),
 		Type: typePing,
 	})
 	if err != nil {
@@ -100,17 +100,17 @@ func (c *pingingConn) ping() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), pingWriteTimeout)
 	defer cancel()
-	return c.Conn.Write(ctx, b)
+	return connection.Conn.Write(ctx, b)
 }
 
 // Close stops the ping and closes the underlying connection. It is safe from
 // any goroutine and more than once, which the supervisor relies on: closing is
 // the only thing that frees a goroutine parked in Read.
-func (c *pingingConn) Close() error {
-	c.once.Do(func() { close(c.closed) })
-	return c.Conn.Close()
+func (connection *pingingConn) Close() error {
+	connection.once.Do(func() { close(connection.closed) })
+	return connection.Conn.Close()
 }
 
 // Wait blocks until the ping goroutine has stopped. It exists for tests: a
 // leaked ticker is exactly the kind of thing that only shows up in production.
-func (c *pingingConn) Wait() { <-c.done }
+func (connection *pingingConn) Wait() { <-connection.done }

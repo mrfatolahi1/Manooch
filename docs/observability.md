@@ -1,4 +1,4 @@
-Covers: M3 · `internal/obs`
+Covers: M3 · `internal/observability`
 
 The process logger and the full Prometheus collector set, on a private registry.
 
@@ -7,7 +7,7 @@ The process logger and the full Prometheus collector set, on a private registry.
 | `logging.go` | `NewLogger`, `ParseLevel` |
 | `metrics.go` | `Metrics`, `NewMetrics`, `Handler`, `Registry`, stream-status constants |
 
-No test file. `NewLogger` returns a JSON `slog.Logger` tagged with the venue. `NewMetrics` registers every collector on a fresh `prometheus.NewRegistry()`. Full API: `go doc ./internal/obs`.
+No test file. `NewLogger` returns a JSON `slog.Logger` tagged with the venue. `NewMetrics` registers every collector on a fresh `prometheus.NewRegistry()`. Full API: `go doc ./internal/observability`.
 
 All 17 collectors are declared up front. Every one of them is now written to.
 

@@ -90,12 +90,12 @@ func parse(s string, scaleExp int, signed bool) (int64, error) {
 	}
 
 	i := 0
-	neg := false
+	negative := false
 	switch s[0] {
 	case '+':
 		i = 1
 	case '-':
-		neg = true
+		negative = true
 		i = 1
 	}
 	if i == len(s) {
@@ -172,7 +172,7 @@ func parse(s string, scaleExp int, signed bool) (int64, error) {
 	if len(digits) == 0 {
 		return 0, nil
 	}
-	if neg && !signed {
+	if negative && !signed {
 		return 0, ErrNegative
 	}
 
@@ -208,7 +208,7 @@ func parse(s string, scaleExp int, signed bool) (int64, error) {
 	if err != nil {
 		return 0, ErrOutOfRange
 	}
-	if neg {
+	if negative {
 		v = -v
 	}
 	return v, nil
@@ -217,9 +217,9 @@ func parse(s string, scaleExp int, signed bool) (int64, error) {
 // format renders v at 10**scaleExp as the shortest exact decimal: no trailing
 // fractional zeros, no exponent. It inverts parse for every value parse emits.
 func format(v int64, scaleExp int) string {
-	neg := v < 0
+	negative := v < 0
 	var u uint64
-	if neg {
+	if negative {
 		u = uint64(-(v + 1)) + 1 // correct at math.MinInt64, unlike -v
 	} else {
 		u = uint64(v)
@@ -233,51 +233,55 @@ func format(v int64, scaleExp int) string {
 	intPart, fracPart := d[:len(d)-scale], d[len(d)-scale:]
 	fracPart = strings.TrimRight(fracPart, "0")
 
-	var b strings.Builder
-	b.Grow(len(d) + 2)
-	if neg {
-		b.WriteByte('-')
+	var builder strings.Builder
+	builder.Grow(len(d) + 2)
+	if negative {
+		builder.WriteByte('-')
 	}
-	b.WriteString(intPart)
+	builder.WriteString(intPart)
 	if fracPart != "" {
-		b.WriteByte('.')
-		b.WriteString(fracPart)
+		builder.WriteByte('.')
+		builder.WriteString(fracPart)
 	}
-	return b.String()
+	return builder.String()
 }
 
 // String renders the exact decimal value.
-func (p Price) String() string { return format(int64(p), PriceExp) }
+func (price Price) String() string { return format(int64(price), PriceExp) }
 
 // String renders the exact decimal value.
-func (s Size) String() string { return format(int64(s), SizeExp) }
+func (size Size) String() string { return format(int64(size), SizeExp) }
 
 // String renders the exact decimal value.
-func (r Rate) String() string { return format(int64(r), RateExp) }
+func (rate Rate) String() string { return format(int64(rate), RateExp) }
 
-// Float is lossy and is for display only. Never feed it back into a calculation.
-func (p Price) Float() float64 { return float64(p) / float64(PriceScale) }
-
-// Float is lossy and is for display only.
-func (s Size) Float() float64 { return float64(s) / float64(SizeScale) }
+// Float is lossy and is for display only. Never feed it back into a
+// calculation.
+func (price Price) Float() float64 { return float64(price) / float64(PriceScale) }
 
 // Float is lossy and is for display only.
-func (r Rate) Float() float64 { return float64(r) / float64(RateScale) }
+func (size Size) Float() float64 { return float64(size) / float64(SizeScale) }
 
-// Cmp returns -1, 0 or +1 as p is less than, equal to, or greater than q.
-func (p Price) Cmp(q Price) int { return cmp64(int64(p), int64(q)) }
+// Float is lossy and is for display only.
+func (rate Rate) Float() float64 { return float64(rate) / float64(RateScale) }
 
-// Cmp returns -1, 0 or +1 as s is less than, equal to, or greater than t.
-func (s Size) Cmp(t Size) int { return cmp64(int64(s), int64(t)) }
+// Compare returns -1, 0 or +1 as the receiver is less than, equal to, or
+// greater than other.
+func (price Price) Compare(other Price) int { return compareInt64(int64(price), int64(other)) }
 
-// Cmp returns -1, 0 or +1 as r is less than, equal to, or greater than q.
-func (r Rate) Cmp(q Rate) int { return cmp64(int64(r), int64(q)) }
+// Compare returns -1, 0 or +1 as the receiver is less than, equal to, or
+// greater than other.
+func (size Size) Compare(other Size) int { return compareInt64(int64(size), int64(other)) }
 
-func cmp64(a, b int64) int {
+// Compare returns -1, 0 or +1 as the receiver is less than, equal to, or
+// greater than other.
+func (rate Rate) Compare(other Rate) int { return compareInt64(int64(rate), int64(other)) }
+
+func compareInt64(first, second int64) int {
 	switch {
-	case a < b:
+	case first < second:
 		return -1
-	case a > b:
+	case first > second:
 		return 1
 	default:
 		return 0

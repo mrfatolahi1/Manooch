@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/you/manooch/gen/manoochv1"
+	"github.com/you/manooch/gen/manoochv1"
 	"github.com/you/manooch/internal/adapter/kucoin"
 	"github.com/you/manooch/internal/core"
 	"github.com/you/manooch/pkg/price"
@@ -42,7 +42,7 @@ func liveAdapter(t *testing.T) *kucoin.Adapter {
 func livePlan(t *testing.T, a *kucoin.Adapter) core.SocketPlan {
 	t.Helper()
 	plans, err := a.PlanSubscriptions([]core.StreamSpec{
-		spec(t, "BTC_USDT", pb.Channel_CHANNEL_MARK_PRICE),
+		spec(t, "BTC_USDT", manoochv1.Channel_CHANNEL_MARK_PRICE),
 	})
 	if err != nil {
 		t.Fatalf("PlanSubscriptions: %v", err)
@@ -85,13 +85,13 @@ func TestLiveInstrumentStream(t *testing.T) {
 		}
 
 		for _, m := range msgs {
-			env := m.Proto.(interface{ GetEnv() *pb.Envelope }).GetEnv()
+			env := m.Proto.(interface{ GetEnv() *manoochv1.Envelope }).GetEnv()
 
 			skew := time.Duration(env.ExchangeTimeNs-env.RecvTimeNs) * time.Nanosecond
 			if skew < -maxClockSkew || skew > maxClockSkew {
 				t.Errorf("%s: clock skew %v exceeds %v", m.Key, skew, maxClockSkew)
 			}
-			if env.Status != pb.Status_STATUS_HEALTHY {
+			if env.Status != manoochv1.Status_STATUS_HEALTHY {
 				t.Errorf("%s: status = %v", m.Key, env.Status)
 			}
 			if env.VenueSeqPresent {
@@ -102,7 +102,7 @@ func TestLiveInstrumentStream(t *testing.T) {
 			}
 		}
 
-		mark, ok := msgs[0].Proto.(*pb.MarkPrice)
+		mark, ok := msgs[0].Proto.(*manoochv1.MarkPrice)
 		if !ok {
 			// funding.rate arrives once a minute and may land first.
 			continue
@@ -112,7 +112,7 @@ func TestLiveInstrumentStream(t *testing.T) {
 		}
 		t.Logf("BTC_USDT mark %s, index %s, skew %v",
 			price.Price(mark.MarkPrice),
-			price.Price(msgs[1].Proto.(*pb.IndexPrice).IndexPrice),
+			price.Price(msgs[1].Proto.(*manoochv1.IndexPrice).IndexPrice),
 			time.Duration(mark.Env.ExchangeTimeNs-mark.Env.RecvTimeNs))
 		return
 	}
@@ -175,10 +175,10 @@ func TestLiveFetchOnce(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), firstFrameDeadline)
 	defer cancel()
 
-	for _, ch := range []pb.Channel{
-		pb.Channel_CHANNEL_MARK_PRICE,
-		pb.Channel_CHANNEL_INDEX_PRICE,
-		pb.Channel_CHANNEL_FUNDING,
+	for _, ch := range []manoochv1.Channel{
+		manoochv1.Channel_CHANNEL_MARK_PRICE,
+		manoochv1.Channel_CHANNEL_INDEX_PRICE,
+		manoochv1.Channel_CHANNEL_FUNDING,
 	} {
 		t.Run(core.ChannelName(ch), func(t *testing.T) {
 			msgs, err := a.FetchOnce(ctx, spec(t, "BTC_USDT", ch))
@@ -188,8 +188,8 @@ func TestLiveFetchOnce(t *testing.T) {
 			if len(msgs) != 1 {
 				t.Fatalf("messages = %d, want 1", len(msgs))
 			}
-			env := msgs[0].Proto.(interface{ GetEnv() *pb.Envelope }).GetEnv()
-			if env.Source != pb.Source_SOURCE_REST {
+			env := msgs[0].Proto.(interface{ GetEnv() *manoochv1.Envelope }).GetEnv()
+			if env.Source != manoochv1.Source_SOURCE_REST {
 				t.Errorf("source = %v, want REST", env.Source)
 			}
 			if env.Instrument.VenueSymbol != "XBTUSDTM" {

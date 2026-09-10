@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	pb "github.com/you/manooch/gen/manoochv1"
+	"github.com/you/manooch/gen/manoochv1"
 	"github.com/you/manooch/internal/core"
 	"github.com/you/manooch/internal/ratelimit"
 	"github.com/you/manooch/internal/transport"
@@ -48,9 +48,9 @@ const maxBulletBodyBytes = 1 << 20
 
 // bulletResponse is /api/v1/bullet-public.
 type bulletResponse struct {
-	Code string      `json:"code"`
-	Data *bulletData `json:"data"`
-	Msg  string      `json:"msg"`
+	Code    string      `json:"code"`
+	Data    *bulletData `json:"data"`
+	Message string      `json:"msg"`
 }
 
 type bulletData struct {
@@ -83,13 +83,13 @@ type bullet struct {
 // connectID is ours and must be unique per connection: KuCoin uses it to tell
 // two connections apart, and reusing one is how a reconnect gets the previous
 // session closed underneath it.
-func (b bullet) URL(connectID string) string {
-	sep := "?"
-	if strings.Contains(b.Endpoint, "?") {
-		sep = "&"
+func (bullet bullet) URL(connectID string) string {
+	separator := "?"
+	if strings.Contains(bullet.Endpoint, "?") {
+		separator = "&"
 	}
-	return b.Endpoint + sep + url.Values{
-		"token":     {b.Token},
+	return bullet.Endpoint + separator + url.Values{
+		"token":     {bullet.Token},
 		"connectId": {connectID},
 	}.Encode()
 }
@@ -103,28 +103,28 @@ func newConnectID() string { return uuid.NewString() }
 // reuses one gets a handshake rejection that reads like the venue being down —
 // so every dial pays for a fresh one, and that cost is the honest price of
 // reconnecting to this venue.
-func (a *Adapter) fetchBullet(ctx context.Context) (bullet, error) {
-	if err := a.opts.Limiter.Allow(ctx, Venue, ratelimit.LimitRESTWeight, bulletWeight); err != nil {
+func (adapter *Adapter) fetchBullet(ctx context.Context) (bullet, error) {
+	if err := adapter.options.Limiter.Allow(ctx, Venue, ratelimit.LimitRESTWeight, bulletWeight); err != nil {
 		return bullet{}, fmt.Errorf("kucoin: bullet: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.opts.WSEndpoint+bulletPath, nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, adapter.options.WebSocketEndpoint+bulletPath, nil)
 	if err != nil {
 		return bullet{}, fmt.Errorf("kucoin: bullet: %w", err)
 	}
-	resp, err := a.opts.HTTPClient.Do(req)
+	response, err := adapter.options.HTTPClient.Do(request)
 	if err != nil {
 		return bullet{}, fmt.Errorf("kucoin: bullet: %w", err)
 	}
-	defer resp.Body.Close()
+	defer response.Body.Close()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBulletBodyBytes))
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxBulletBodyBytes))
 	if err != nil {
 		return bullet{}, fmt.Errorf("kucoin: bullet: %w", err)
 	}
-	if resp.StatusCode != http.StatusOK {
-		return bullet{}, core.NewParseError(core.KindVenue, pb.Channel_CHANNEL_UNSPECIFIED, "", nil,
-			"bullet: %s: %s", resp.Status, truncate(string(body), 200))
+	if response.StatusCode != http.StatusOK {
+		return bullet{}, core.NewParseError(core.KindVenue, manoochv1.Channel_CHANNEL_UNSPECIFIED, "", nil,
+			"bullet: %s: %s", response.Status, truncate(string(body), 200))
 	}
 	return parseBullet(body)
 }
@@ -132,38 +132,38 @@ func (a *Adapter) fetchBullet(ctx context.Context) (bullet, error) {
 // parseBullet reads the bootstrap response. It is separate from the HTTP call
 // so a committed fixture can prove the mapping without a server.
 func parseBullet(body []byte) (bullet, error) {
-	var r bulletResponse
-	if err := json.Unmarshal(body, &r); err != nil {
-		return bullet{}, core.NewParseError(core.KindJSON, pb.Channel_CHANNEL_UNSPECIFIED, "", err, "bullet is not json")
+	var bulletResponse bulletResponse
+	if err := json.Unmarshal(body, &bulletResponse); err != nil {
+		return bullet{}, core.NewParseError(core.KindJSON, manoochv1.Channel_CHANNEL_UNSPECIFIED, "", err, "bullet is not json")
 	}
-	if r.Code != codeOK {
-		return bullet{}, core.NewParseError(core.KindVenue, pb.Channel_CHANNEL_UNSPECIFIED, "", nil,
-			"bullet: code %s: %s", r.Code, r.Msg)
+	if bulletResponse.Code != codeOK {
+		return bullet{}, core.NewParseError(core.KindVenue, manoochv1.Channel_CHANNEL_UNSPECIFIED, "", nil,
+			"bullet: code %s: %s", bulletResponse.Code, bulletResponse.Message)
 	}
-	if r.Data == nil || r.Data.Token == "" || len(r.Data.InstanceServers) == 0 {
-		return bullet{}, core.NewParseError(core.KindField, pb.Channel_CHANNEL_UNSPECIFIED, "", nil,
+	if bulletResponse.Data == nil || bulletResponse.Data.Token == "" || len(bulletResponse.Data.InstanceServers) == 0 {
+		return bullet{}, core.NewParseError(core.KindField, manoochv1.Channel_CHANNEL_UNSPECIFIED, "", nil,
 			"bullet: no token or no instance server")
 	}
 
 	// The first server the venue offers, not one we pick: the token is issued
 	// against the set it came with, and choosing differently later is how a
 	// working bootstrap turns into an unexplained handshake failure.
-	s := r.Data.InstanceServers[0]
-	if s.Endpoint == "" {
-		return bullet{}, core.NewParseError(core.KindField, pb.Channel_CHANNEL_UNSPECIFIED, "", nil,
+	bulletServer := bulletResponse.Data.InstanceServers[0]
+	if bulletServer.Endpoint == "" {
+		return bullet{}, core.NewParseError(core.KindField, manoochv1.Channel_CHANNEL_UNSPECIFIED, "", nil,
 			"bullet: instance server has no endpoint")
 	}
-	if s.PingInterval <= 0 || s.PingTimeout <= 0 {
+	if bulletServer.PingInterval <= 0 || bulletServer.PingTimeout <= 0 {
 		// Without these the client cannot keep the connection alive, and a
 		// default of ours would be a number the venue never agreed to.
-		return bullet{}, core.NewParseError(core.KindField, pb.Channel_CHANNEL_UNSPECIFIED, "", nil,
-			"bullet: pingInterval %d pingTimeout %d", s.PingInterval, s.PingTimeout)
+		return bullet{}, core.NewParseError(core.KindField, manoochv1.Channel_CHANNEL_UNSPECIFIED, "", nil,
+			"bullet: pingInterval %d pingTimeout %d", bulletServer.PingInterval, bulletServer.PingTimeout)
 	}
 	return bullet{
-		Token:        r.Data.Token,
-		Endpoint:     s.Endpoint,
-		PingInterval: time.Duration(s.PingInterval) * time.Millisecond,
-		PingTimeout:  time.Duration(s.PingTimeout) * time.Millisecond,
+		Token:        bulletResponse.Data.Token,
+		Endpoint:     bulletServer.Endpoint,
+		PingInterval: time.Duration(bulletServer.PingInterval) * time.Millisecond,
+		PingTimeout:  time.Duration(bulletServer.PingTimeout) * time.Millisecond,
 	}, nil
 }
 
@@ -180,41 +180,41 @@ func parseBullet(body []byte) (bullet, error) {
 // Nothing above this method had to change to accommodate any of it: the
 // supervisor asks for a connection and gets one, exactly as it does for a venue
 // whose subscriptions are in the URL.
-func (a *Adapter) Dial(ctx context.Context, plan core.SocketPlan) (core.Conn, error) {
-	topics, err := a.topics(plan)
+func (adapter *Adapter) Dial(ctx context.Context, plan core.SocketPlan) (core.Conn, error) {
+	topics, err := adapter.topics(plan)
 	if err != nil {
 		return nil, err
 	}
 	if len(topics) == 0 {
 		return nil, fmt.Errorf("kucoin: plan %s has no topics", plan.ID)
 	}
-	if err := a.opts.Limiter.Allow(ctx, Venue, ratelimit.LimitWSConnect, 1); err != nil {
+	if err := adapter.options.Limiter.Allow(ctx, Venue, ratelimit.LimitWebSocketConnect, 1); err != nil {
 		return nil, fmt.Errorf("kucoin: dial %s: %w", plan.ID, err)
 	}
 
-	b, err := a.fetchBullet(ctx)
+	bullet, err := adapter.fetchBullet(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	conn, err := a.opts.Dial(ctx, transport.Options{
-		URL:           b.URL(a.opts.ConnectID()),
-		ReadTimeout:   a.opts.ReadTimeout,
-		MaxFrameBytes: a.opts.MaxFrameBytes,
-		HTTPClient:    a.opts.HTTPClient,
+	connection, err := adapter.options.Dial(ctx, transport.Options{
+		URL:           bullet.URL(adapter.options.ConnectID()),
+		ReadTimeout:   adapter.options.ReadTimeout,
+		MaxFrameBytes: adapter.options.MaxFrameBytes,
+		HTTPClient:    adapter.options.HTTPClient,
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	if err := a.subscribe(ctx, conn, topics); err != nil {
+	if err := adapter.subscribe(ctx, connection, topics); err != nil {
 		// Close what we opened. A socket left dangling after a failed
 		// subscription still counts against the venue's connection limit and
 		// still delivers nothing.
-		_ = conn.Close()
+		_ = connection.Close()
 		return nil, err
 	}
-	return newPingingConn(conn, b.PingInterval), nil
+	return newPingingConn(connection, bullet.PingInterval), nil
 }
 
 // truncate bounds an error body so one bad response cannot fill the log.

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/you/manooch/gen/manoochv1"
+	"github.com/you/manooch/gen/manoochv1"
 	"github.com/you/manooch/internal/adapter/adaptertest"
 	"github.com/you/manooch/internal/adapter/binance"
 	"github.com/you/manooch/internal/adapter/kucoin"
@@ -18,14 +18,15 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// ttls are deliberately identical across the two venues here. In production
-// they are not — KuCoin's funding cadence is a minute against Binance's second,
-// so its funding key lives 180s against 3s — and holding them equal is what
-// makes the comparison below about normalization rather than about cadence.
-var ttls = map[pb.Channel]time.Duration{
-	pb.Channel_CHANNEL_MARK_PRICE:  3 * time.Second,
-	pb.Channel_CHANNEL_INDEX_PRICE: 3 * time.Second,
-	pb.Channel_CHANNEL_FUNDING:     3 * time.Second,
+// The time-to-live values are deliberately identical across the two venues
+// here. In production they are not — KuCoin's funding cadence is a minute
+// against Binance's second, so its funding key lives 180s against 3s — and
+// holding them equal is what makes the comparison below about normalization
+// rather than about cadence.
+var timeToLives = map[manoochv1.Channel]time.Duration{
+	manoochv1.Channel_CHANNEL_MARK_PRICE:  3 * time.Second,
+	manoochv1.Channel_CHANNEL_INDEX_PRICE: 3 * time.Second,
+	manoochv1.Channel_CHANNEL_FUNDING:     3 * time.Second,
 }
 
 // exchangeMS is the one instant both venues stamp their frames with.
@@ -33,37 +34,37 @@ const exchangeMS = 1731899129000
 
 func newBinance(t *testing.T) core.Adapter {
 	t.Helper()
-	a, err := binance.New(binance.Options{
-		WSEndpoint:          "wss://fstream.binance.com/stream",
+	adapter, err := binance.New(binance.Options{
+		WebSocketEndpoint:   "wss://fstream.binance.com/stream",
 		SymbolOverrides:     map[string]string{"BTC_USDT": "BTCUSDT"},
 		MaxStreamsPerSocket: 100,
-		TTLs:                ttls,
+		TimeToLive:          timeToLives,
 	})
 	if err != nil {
 		t.Fatalf("binance.New: %v", err)
 	}
-	return a
+	return adapter
 }
 
 func newKuCoin(t *testing.T) core.Adapter {
 	t.Helper()
-	a, err := kucoin.New(kucoin.Options{
-		WSEndpoint:          "https://api-futures.kucoin.com",
+	adapter, err := kucoin.New(kucoin.Options{
+		WebSocketEndpoint:   "https://api-futures.kucoin.com",
 		SymbolOverrides:     map[string]string{"BTC_USDT": "XBTUSDTM"},
 		MaxStreamsPerSocket: 50,
-		TTLs:                ttls,
+		TimeToLive:          timeToLives,
 	})
 	if err != nil {
 		t.Fatalf("kucoin.New: %v", err)
 	}
-	return a
+	return adapter
 }
 
 // binanceFrame is one markPriceUpdate with the given decimals. Binance quotes
 // its numbers.
 func binanceFrame(mark, index, rate string) []byte {
-	return []byte(`{"e":"markPriceUpdate","E":` + itoa(exchangeMS) + `,"s":"BTCUSDT",` +
-		`"p":"` + mark + `","i":"` + index + `","r":"` + rate + `","T":` + itoa(exchangeMS+3600000) + `}`)
+	return []byte(`{"e":"markPriceUpdate","E":` + formatInt(exchangeMS) + `,"s":"BTCUSDT",` +
+		`"p":"` + mark + `","i":"` + index + `","r":"` + rate + `","T":` + formatInt(exchangeMS+3600000) + `}`)
 }
 
 // kucoinMarkIndexFrame is one mark.index.price message. KuCoin does not quote
@@ -71,16 +72,16 @@ func binanceFrame(mark, index, rate string) []byte {
 func kucoinMarkIndexFrame(mark, index string) []byte {
 	return []byte(`{"topic":"/contract/instrument:XBTUSDTM","type":"message",` +
 		`"subject":"mark.index.price","data":{"markPrice":` + mark + `,"indexPrice":` + index +
-		`,"granularity":1000,"timestamp":` + itoa(exchangeMS) + `}}`)
+		`,"granularity":1000,"timestamp":` + formatInt(exchangeMS) + `}}`)
 }
 
 func kucoinFundingFrame(rate string) []byte {
 	return []byte(`{"topic":"/contract/instrument:XBTUSDTM","type":"message",` +
 		`"subject":"funding.rate","data":{"granularity":60000,"fundingRate":` + rate +
-		`,"timestamp":` + itoa(exchangeMS) + `}}`)
+		`,"timestamp":` + formatInt(exchangeMS) + `}}`)
 }
 
-func itoa(v int64) string {
+func formatInt(v int64) string {
 	if v == 0 {
 		return "0"
 	}
@@ -94,11 +95,11 @@ func itoa(v int64) string {
 
 // byChannel indexes a Parse result so a test can name a channel rather than an
 // offset.
-func byChannel(t *testing.T, msgs []core.Message) map[pb.Channel]core.Message {
+func byChannel(t *testing.T, messages []core.Message) map[manoochv1.Channel]core.Message {
 	t.Helper()
-	out := make(map[pb.Channel]core.Message, len(msgs))
-	for _, m := range msgs {
-		out[m.Channel] = m
+	out := make(map[manoochv1.Channel]core.Message, len(messages))
+	for _, message := range messages {
+		out[message.Channel] = message
 	}
 	return out
 }
@@ -109,9 +110,9 @@ func byChannel(t *testing.T, msgs []core.Message) map[pb.Channel]core.Message {
 // into float64 slipping into either adapter.
 //
 // 1234567.89012345678 at the price scale is 123456789012345678: eighteen
-// significant digits, where float64 holds fifteen or sixteen. A value that comes
-// back exact cannot have been through one. Binance quotes the number and KuCoin
-// does not, so the two paths through the decoder are both covered.
+// significant digits, where float64 holds fifteen or sixteen. A value that
+// comes back exact cannot have been through one. Binance quotes the number and
+// KuCoin does not, so the two paths through the decoder are both covered.
 func TestSubFloatPrecisionRoundTrips(t *testing.T) {
 	const (
 		decimal = "1234567.89012345678"
@@ -157,42 +158,42 @@ func TestSmallestRepresentablePriceSurvives(t *testing.T) {
 func TestFinerThanTheScaleIsRejected(t *testing.T) {
 	const decimal = "0.000000000123456789"
 
-	for name, tc := range map[string]struct {
-		a     core.Adapter
-		frame []byte
+	for name, testCase := range map[string]struct {
+		adapter core.Adapter
+		frame   []byte
 	}{
 		"binance": {newBinance(t), binanceFrame(decimal, decimal, "0.00038167")},
 		"kucoin":  {newKuCoin(t), kucoinMarkIndexFrame(decimal, decimal)},
 	} {
 		t.Run(name, func(t *testing.T) {
-			msgs, err := tc.a.Parse(tc.frame, adaptertest.RecvNs)
-			if len(msgs) != 0 {
-				t.Errorf("Parse produced %d messages for a value finer than the scale", len(msgs))
+			messages, err := testCase.adapter.Parse(testCase.frame, adaptertest.ReceivedNs)
+			if len(messages) != 0 {
+				t.Errorf("Parse produced %d messages for a value finer than the scale", len(messages))
 			}
 			if !errors.Is(err, price.ErrPrecisionLoss) {
 				t.Fatalf("Parse = %v, want price.ErrPrecisionLoss", err)
 			}
 			// Counted apart from a malformed value: this is the one failure
 			// that would otherwise publish a plausible wrong price.
-			var pe *core.ParseError
-			if !errors.As(err, &pe) || pe.Kind != core.KindRange {
-				t.Errorf("kind = %v, want %q", pe, core.KindRange)
+			var parseError *core.ParseError
+			if !errors.As(err, &parseError) || parseError.Kind != core.KindRange {
+				t.Errorf("kind = %v, want %q", parseError, core.KindRange)
 			}
 		})
 	}
 }
 
-func markPriceOf(t *testing.T, a core.Adapter, frame []byte) int64 {
+func markPriceOf(t *testing.T, adapter core.Adapter, frame []byte) int64 {
 	t.Helper()
-	msgs, err := a.Parse(frame, adaptertest.RecvNs)
+	messages, err := adapter.Parse(frame, adaptertest.ReceivedNs)
 	if err != nil {
-		t.Fatalf("%s Parse: %v", a.Venue(), err)
+		t.Fatalf("%s Parse: %v", adapter.Venue(), err)
 	}
-	m, ok := byChannel(t, msgs)[pb.Channel_CHANNEL_MARK_PRICE]
+	message, ok := byChannel(t, messages)[manoochv1.Channel_CHANNEL_MARK_PRICE]
 	if !ok {
-		t.Fatalf("%s produced no mark price", a.Venue())
+		t.Fatalf("%s produced no mark price", adapter.Venue())
 	}
-	return m.Proto.(*pb.MarkPrice).MarkPrice
+	return message.Proto.(*manoochv1.MarkPrice).MarkPrice
 }
 
 // ---------- cross-venue normalization ----------
@@ -211,45 +212,45 @@ func TestIdenticalInputNormalizesIdentically(t *testing.T) {
 		index = "90440.135"
 	)
 
-	bin, err := newBinance(t).Parse(binanceFrame(mark, index, "0.00038167"), adaptertest.RecvNs)
+	binanceMessages, err := newBinance(t).Parse(binanceFrame(mark, index, "0.00038167"), adaptertest.ReceivedNs)
 	if err != nil {
 		t.Fatalf("binance Parse: %v", err)
 	}
-	kc, err := newKuCoin(t).Parse(kucoinMarkIndexFrame(mark, index), adaptertest.RecvNs)
+	kucoinMessages, err := newKuCoin(t).Parse(kucoinMarkIndexFrame(mark, index), adaptertest.ReceivedNs)
 	if err != nil {
 		t.Fatalf("kucoin Parse: %v", err)
 	}
 
-	b, k := byChannel(t, bin), byChannel(t, kc)
-	for _, ch := range []pb.Channel{pb.Channel_CHANNEL_MARK_PRICE, pb.Channel_CHANNEL_INDEX_PRICE} {
-		t.Run(core.ChannelName(ch), func(t *testing.T) {
-			bm, ok := b[ch]
+	b, k := byChannel(t, binanceMessages), byChannel(t, kucoinMessages)
+	for _, channel := range []manoochv1.Channel{manoochv1.Channel_CHANNEL_MARK_PRICE, manoochv1.Channel_CHANNEL_INDEX_PRICE} {
+		t.Run(core.ChannelName(channel), func(t *testing.T) {
+			binanceMessage, ok := b[channel]
 			if !ok {
-				t.Fatalf("binance produced no %s", core.ChannelName(ch))
+				t.Fatalf("binance produced no %s", core.ChannelName(channel))
 			}
-			km, ok := k[ch]
+			kucoinMessage, ok := k[channel]
 			if !ok {
-				t.Fatalf("kucoin produced no %s", core.ChannelName(ch))
+				t.Fatalf("kucoin produced no %s", core.ChannelName(channel))
 			}
 
-			if bm.TTL != km.TTL {
-				t.Errorf("ttl %v and %v", bm.TTL, km.TTL)
+			if binanceMessage.TimeToLive != kucoinMessage.TimeToLive {
+				t.Errorf("ttl %v and %v", binanceMessage.TimeToLive, kucoinMessage.TimeToLive)
 			}
 			// The key differs only in the venue component, which is the point:
 			// market type, symbol and channel are the venue-independent
 			// identity, and both adapters built the key with publish.Key.
-			if got, want := strip(km.Key, "KUCOIN"), strip(bm.Key, "BINANCE"); got != want {
-				t.Errorf("keys differ beyond the venue: %q and %q", km.Key, bm.Key)
+			if got, want := strip(kucoinMessage.Key, "KUCOIN"), strip(binanceMessage.Key, "BINANCE"); got != want {
+				t.Errorf("keys differ beyond the venue: %q and %q", kucoinMessage.Key, binanceMessage.Key)
 			}
-			// The specs are the same instrument on the same channel, which is
+			// The specifications are the same instrument on the same channel, which is
 			// what the supervisor schedules and the health tracker registers.
-			if bm.Spec != km.Spec {
-				t.Errorf("specs differ: %v and %v", bm.Spec, km.Spec)
+			if binanceMessage.Specification != kucoinMessage.Specification {
+				t.Errorf("specs differ: %v and %v", binanceMessage.Specification, kucoinMessage.Specification)
 			}
 
 			// Including exchange_time_is_send_time: both venues stamp mark and
 			// index as they push them, so both must say so.
-			if diff := comparePayloads(bm.Proto, km.Proto); diff != "" {
+			if diff := comparePayloads(binanceMessage.Proto, kucoinMessage.Proto); diff != "" {
 				t.Errorf("normalized payloads differ beyond venue and venue_symbol: %s", diff)
 			}
 		})
@@ -268,50 +269,50 @@ func TestIdenticalInputNormalizesIdentically(t *testing.T) {
 func TestFundingDiffersOnlyWhereTheVenuesDo(t *testing.T) {
 	const rate = "-0.002966"
 
-	bin, err := newBinance(t).Parse(binanceFrame("90445.02", "90440.135", rate), adaptertest.RecvNs)
+	binanceMessages, err := newBinance(t).Parse(binanceFrame("90445.02", "90440.135", rate), adaptertest.ReceivedNs)
 	if err != nil {
 		t.Fatalf("binance Parse: %v", err)
 	}
-	kc, err := newKuCoin(t).Parse(kucoinFundingFrame(rate), adaptertest.RecvNs)
+	kucoinMessages, err := newKuCoin(t).Parse(kucoinFundingFrame(rate), adaptertest.ReceivedNs)
 	if err != nil {
 		t.Fatalf("kucoin Parse: %v", err)
 	}
 
-	bf, ok := byChannel(t, bin)[pb.Channel_CHANNEL_FUNDING]
+	binanceFunding, ok := byChannel(t, binanceMessages)[manoochv1.Channel_CHANNEL_FUNDING]
 	if !ok {
 		t.Fatal("binance produced no funding")
 	}
-	kf, ok := byChannel(t, kc)[pb.Channel_CHANNEL_FUNDING]
+	kucoinFunding, ok := byChannel(t, kucoinMessages)[manoochv1.Channel_CHANNEL_FUNDING]
 	if !ok {
 		t.Fatal("kucoin produced no funding")
 	}
 
-	if got, want := kf.Proto.(*pb.Funding).FundingRate, bf.Proto.(*pb.Funding).FundingRate; got != want {
+	if got, want := kucoinFunding.Proto.(*manoochv1.Funding).FundingRate, binanceFunding.Proto.(*manoochv1.Funding).FundingRate; got != want {
 		t.Errorf("funding rate = %d and %d for the same decimal", got, want)
 	}
-	if kf.Proto.(*pb.Funding).NextFundingTimeNs != 0 {
+	if kucoinFunding.Proto.(*manoochv1.Funding).NextFundingTimeNs != 0 {
 		t.Error("kucoin filled next_funding_time_ns; the stream does not carry one")
 	}
-	if bf.Proto.(*pb.Funding).NextFundingTimeNs == 0 {
+	if binanceFunding.Proto.(*manoochv1.Funding).NextFundingTimeNs == 0 {
 		t.Error("binance dropped next_funding_time_ns; the stream does carry one")
 	}
 
 	// The second difference: KuCoin's funding timestamp is the settlement
 	// instant, hours old by the time the frame arrives, so it must not be
 	// offered as a clock reading. Binance's is the moment it sent the frame.
-	if kf.Proto.(*pb.Funding).Env.ExchangeTimeIsSendTime {
+	if kucoinFunding.Proto.(*manoochv1.Funding).Env.ExchangeTimeIsSendTime {
 		t.Error("kucoin claims its funding timestamp is a send time; it is the settlement instant")
 	}
-	if !bf.Proto.(*pb.Funding).Env.ExchangeTimeIsSendTime {
+	if !binanceFunding.Proto.(*manoochv1.Funding).Env.ExchangeTimeIsSendTime {
 		t.Error("binance dropped exchange_time_is_send_time; its funding timestamp is the send time")
 	}
 
 	// With those two venue-supplied differences removed, everything else
 	// matches.
-	bClone := proto.Clone(bf.Proto).(*pb.Funding)
-	bClone.NextFundingTimeNs = 0
-	bClone.Env.ExchangeTimeIsSendTime = false
-	if diff := comparePayloads(bClone, kf.Proto); diff != "" {
+	binanceClone := proto.Clone(binanceFunding.Proto).(*manoochv1.Funding)
+	binanceClone.NextFundingTimeNs = 0
+	binanceClone.Env.ExchangeTimeIsSendTime = false
+	if diff := comparePayloads(binanceClone, kucoinFunding.Proto); diff != "" {
 		t.Errorf("funding differs beyond next_funding_time_ns and exchange_time_is_send_time: %s", diff)
 	}
 }
@@ -330,10 +331,10 @@ func comparePayloads(a, b proto.Message) string {
 // neutralize clones a payload and clears the two fields a venue owns.
 func neutralize(m proto.Message) proto.Message {
 	c := proto.Clone(m)
-	env := c.(interface{ GetEnv() *pb.Envelope }).GetEnv()
-	env.Venue = ""
-	if env.Instrument != nil {
-		env.Instrument.VenueSymbol = ""
+	envelope := c.(interface{ GetEnv() *manoochv1.Envelope }).GetEnv()
+	envelope.Venue = ""
+	if envelope.Instrument != nil {
+		envelope.Instrument.VenueSymbol = ""
 	}
 	return c
 }

@@ -21,19 +21,19 @@ import (
 	"github.com/ory/dockertest/v3"
 	"github.com/ory/dockertest/v3/docker"
 	"github.com/redis/go-redis/v9"
-	pb "github.com/you/manooch/gen/manoochv1"
+	"github.com/you/manooch/gen/manoochv1"
 	"github.com/you/manooch/internal/core"
 	"github.com/you/manooch/internal/core/coretest"
 	"github.com/you/manooch/internal/fallback"
 	"github.com/you/manooch/internal/health"
-	"github.com/you/manooch/internal/obs"
+	"github.com/you/manooch/internal/observability"
 	"github.com/you/manooch/internal/publish"
 )
 
 const testDB = 0
 
 // markOnly narrows a test to one channel per instrument.
-var markOnly = []pb.Channel{pb.Channel_CHANNEL_MARK_PRICE}
+var markOnly = []manoochv1.Channel{manoochv1.Channel_CHANNEL_MARK_PRICE}
 
 var redisAddr string
 
@@ -105,7 +105,7 @@ type liveOptions struct {
 	// written is indistinguishable from one that expired — which is correct,
 	// and makes a single-channel assertion noisy unless the others are simply
 	// not configured.
-	channels      []pb.Channel
+	channels      []manoochv1.Channel
 	ttl           time.Duration
 	heartbeat     time.Duration
 	maxConcurrent int
@@ -167,7 +167,7 @@ func newLive(t *testing.T, o liveOptions) *live {
 		Venue:         coretest.Venue,
 		InstanceID:    fmt.Sprintf("instance-%d", time.Now().UnixNano()),
 		SchemaVersion: 2,
-		Metrics:       obs.NewMetrics(),
+		Metrics:       observability.NewMetrics(),
 		Logger:        quiet(),
 	})
 	if err != nil {
@@ -191,7 +191,7 @@ func newLive(t *testing.T, o liveOptions) *live {
 	l.tracker, err = health.New(health.Options{
 		Venue:               coretest.Venue,
 		Publisher:           pub,
-		Metrics:             obs.NewMetrics(),
+		Metrics:             observability.NewMetrics(),
 		Log:                 quiet(),
 		HeartbeatInterval:   o.heartbeat,
 		ClockSkewDegradedMS: 2000,
@@ -214,7 +214,7 @@ func newLive(t *testing.T, o liveOptions) *live {
 		Redis:              l.rdb,
 		DB:                 testDB,
 		Health:             l.tracker,
-		Metrics:            obs.NewMetrics(),
+		Metrics:            observability.NewMetrics(),
 		Log:                quiet(),
 		Specs:              specs,
 		MaxConcurrentPolls: o.maxConcurrent,
@@ -265,8 +265,8 @@ func (l *live) socketMessage(t *testing.T, spec core.StreamSpec) {
 	l.watcher.Note(spec)
 	l.tracker.Received(spec)
 
-	m := l.adapter.Message(spec, time.Now().UnixNano(), pb.Source_SOURCE_WEBSOCKET)
-	env := m.Proto.(interface{ GetEnv() *pb.Envelope }).GetEnv()
+	m := l.adapter.Message(spec, time.Now().UnixNano(), manoochv1.Source_SOURCE_WEBSOCKET)
+	env := m.Proto.(interface{ GetEnv() *manoochv1.Envelope }).GetEnv()
 	env.Status, env.StatusReason = l.tracker.Status(spec)
 
 	if err := l.pub.Publish(context.Background(), m.Key, m.Proto, m.TTL); err != nil {
@@ -275,7 +275,7 @@ func (l *live) socketMessage(t *testing.T, spec core.StreamSpec) {
 }
 
 // envelope reads a key back the way a consumer would.
-func (l *live) envelope(t *testing.T, key string, ch pb.Channel) *pb.Envelope {
+func (l *live) envelope(t *testing.T, key string, ch manoochv1.Channel) *manoochv1.Envelope {
 	t.Helper()
 	b, err := l.rdb.Get(context.Background(), key).Bytes()
 	if err != nil {
@@ -365,10 +365,10 @@ func TestFallbackEngagesAndDisengages(t *testing.T) {
 	// The key comes back, written by REST and labelled as such.
 	eventually(t, "fallback to republish the key", func() bool {
 		env := l.envelope(t, k, spec.Channel)
-		return env != nil && env.Source == pb.Source_SOURCE_REST
+		return env != nil && env.Source == manoochv1.Source_SOURCE_REST
 	})
 	env := l.envelope(t, k, spec.Channel)
-	if env.Status != pb.Status_STATUS_DEGRADED {
+	if env.Status != manoochv1.Status_STATUS_DEGRADED {
 		t.Errorf("status = %s, want DEGRADED", core.StatusName(env.Status))
 	}
 	if env.StatusReason == "" {
@@ -384,10 +384,10 @@ func TestFallbackEngagesAndDisengages(t *testing.T) {
 		t.Errorf("%d pollers still active after a websocket message", l.watcher.Active())
 	}
 	env = l.envelope(t, k, spec.Channel)
-	if env.Source != pb.Source_SOURCE_WEBSOCKET {
+	if env.Source != manoochv1.Source_SOURCE_WEBSOCKET {
 		t.Errorf("source = %s, want WEBSOCKET", core.SourceName(env.Source))
 	}
-	if env.Status != pb.Status_STATUS_HEALTHY {
+	if env.Status != manoochv1.Status_STATUS_HEALTHY {
 		t.Errorf("status = %s (%q), want HEALTHY", core.StatusName(env.Status), env.StatusReason)
 	}
 }
@@ -403,13 +403,13 @@ func TestFallbackPastMaxDurationGoesStale(t *testing.T) {
 
 	eventually(t, "fallback to escalate to stale", func() bool {
 		env := l.envelope(t, k, spec.Channel)
-		return env != nil && env.Status == pb.Status_STATUS_STALE
+		return env != nil && env.Status == manoochv1.Status_STATUS_STALE
 	})
 
 	// Still REST, still being published: giving up entirely would leave a
 	// consumer with no value rather than one labelled not to trade on.
 	env := l.envelope(t, k, spec.Channel)
-	if env.Source != pb.Source_SOURCE_REST {
+	if env.Source != manoochv1.Source_SOURCE_REST {
 		t.Errorf("source = %s, want REST", core.SourceName(env.Source))
 	}
 }
@@ -429,7 +429,7 @@ func TestConcurrencyCapLeavesTheExcessStale(t *testing.T) {
 	eventually(t, "the excess stream to go stale", func() bool {
 		stale := 0
 		for _, spec := range l.specs {
-			if st, reason := l.tracker.Status(spec); st == pb.Status_STATUS_STALE && reason == "fallback at capacity" {
+			if st, reason := l.tracker.Status(spec); st == manoochv1.Status_STATUS_STALE && reason == "fallback at capacity" {
 				stale++
 			}
 		}
@@ -453,7 +453,7 @@ func TestHealthPublishesOnTransitionAndHeartbeat(t *testing.T) {
 	go func() { defer close(done); l.tracker.Run(ctx) }()
 
 	spec := l.specs[0]
-	instrumentKey := publish.Key(coretest.Venue, spec.Instrument.MarketType, spec.Instrument.Canonical(), pb.Channel_CHANNEL_HEALTH)
+	instrumentKey := publish.Key(coretest.Venue, spec.Instrument.MarketType, spec.Instrument.Canonical(), manoochv1.Channel_CHANNEL_HEALTH)
 	venueKey := publish.VenueKey(coretest.Venue, publish.SubjectHealth)
 
 	eventually(t, "the health keys to appear", func() bool {
@@ -468,17 +468,17 @@ func TestHealthPublishesOnTransitionAndHeartbeat(t *testing.T) {
 	}
 
 	// The heartbeat republishes with nothing changed.
-	first := l.envelope(t, instrumentKey, pb.Channel_CHANNEL_HEALTH).PublishSeq
+	first := l.envelope(t, instrumentKey, manoochv1.Channel_CHANNEL_HEALTH).PublishSeq
 	eventually(t, "a heartbeat with nothing changed", func() bool {
-		env := l.envelope(t, instrumentKey, pb.Channel_CHANNEL_HEALTH)
+		env := l.envelope(t, instrumentKey, manoochv1.Channel_CHANNEL_HEALTH)
 		return env != nil && env.PublishSeq > first
 	})
 
 	// A transition does not wait for the next tick.
 	l.tracker.Leaked(2)
 	eventually(t, "the transition to reach the venue key", func() bool {
-		env := l.envelope(t, venueKey, pb.Channel_CHANNEL_HEALTH)
-		return env != nil && env.Status == pb.Status_STATUS_DEGRADED && env.StatusReason == "leaked goroutines: 2"
+		env := l.envelope(t, venueKey, manoochv1.Channel_CHANNEL_HEALTH)
+		return env != nil && env.Status == manoochv1.Status_STATUS_DEGRADED && env.StatusReason == "leaked goroutines: 2"
 	})
 
 	// And the channel is detectably dead once the publisher stops.

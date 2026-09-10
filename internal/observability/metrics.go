@@ -1,4 +1,4 @@
-package obs
+package observability
 
 import (
 	"net/http"
@@ -14,12 +14,12 @@ import (
 // registered that was not asked for: no Go runtime collector, no process
 // collector, no metric arriving because a dependency imported a package.
 type Metrics struct {
-	reg *prometheus.Registry
+	registry *prometheus.Registry
 
 	// Ingest.
-	WSFramesReceived *prometheus.CounterVec // venue, market_type, channel
-	ParseErrors      *prometheus.CounterVec // venue, channel, kind
-	RangeErrors      *prometheus.CounterVec // venue, channel
+	WebSocketFramesReceived *prometheus.CounterVec // venue, market_type, channel
+	ParseErrors             *prometheus.CounterVec // venue, channel, kind
+	RangeErrors             *prometheus.CounterVec // venue, channel
 
 	// Publish.
 	MessagesPublished  *prometheus.CounterVec   // venue, market_type, symbol, channel, source
@@ -53,23 +53,23 @@ const (
 
 // NewMetrics registers every collector on a fresh registry.
 func NewMetrics() *Metrics {
-	reg := prometheus.NewRegistry()
-	m := &Metrics{reg: reg}
+	registry := prometheus.NewRegistry()
+	metrics := &Metrics{registry: registry}
 
 	counter := func(name, help string, labels ...string) *prometheus.CounterVec {
-		c := prometheus.NewCounterVec(prometheus.CounterOpts{Name: name, Help: help}, labels)
-		reg.MustRegister(c)
-		return c
+		counter := prometheus.NewCounterVec(prometheus.CounterOpts{Name: name, Help: help}, labels)
+		registry.MustRegister(counter)
+		return counter
 	}
 	gauge := func(name, help string, labels ...string) *prometheus.GaugeVec {
-		g := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: name, Help: help}, labels)
-		reg.MustRegister(g)
-		return g
+		gauge := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: name, Help: help}, labels)
+		registry.MustRegister(gauge)
+		return gauge
 	}
 	histogram := func(name, help string, buckets []float64, labels ...string) *prometheus.HistogramVec {
-		h := prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: name, Help: help, Buckets: buckets}, labels)
-		reg.MustRegister(h)
-		return h
+		histogram := prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: name, Help: help, Buckets: buckets}, labels)
+		registry.MustRegister(histogram)
+		return histogram
 	}
 
 	// Separate ranges: publish latency spans venue network time, internal
@@ -78,56 +78,56 @@ func NewMetrics() *Metrics {
 	publishBuckets := prometheus.ExponentialBuckets(0.0005, 2, 14) // 0.5ms .. ~4s
 	internalBuckets := prometheus.ExponentialBuckets(0.00005, 2, 15)
 
-	m.WSFramesReceived = counter("manooch_ws_frames_received_total",
+	metrics.WebSocketFramesReceived = counter("manooch_ws_frames_received_total",
 		"Websocket frames received from the venue.", "venue", "market_type", "channel")
-	m.ParseErrors = counter("manooch_parse_errors_total",
+	metrics.ParseErrors = counter("manooch_parse_errors_total",
 		"Venue messages that could not be parsed, by kind.", "venue", "channel", "kind")
-	m.RangeErrors = counter("manooch_range_errors_total",
+	metrics.RangeErrors = counter("manooch_range_errors_total",
 		"Numeric values rejected for not fitting the fixed-point scale.", "venue", "channel")
 
-	m.MessagesPublished = counter("manooch_messages_published_total",
+	metrics.MessagesPublished = counter("manooch_messages_published_total",
 		"Messages written to Redis.", "venue", "market_type", "symbol", "channel", "source")
-	m.PublishLatency = histogram("manooch_publish_latency_seconds",
+	metrics.PublishLatency = histogram("manooch_publish_latency_seconds",
 		"Exchange timestamp to publish timestamp.", publishBuckets, "venue", "channel")
-	m.InternalLatency = histogram("manooch_internal_latency_seconds",
+	metrics.InternalLatency = histogram("manooch_internal_latency_seconds",
 		"Receive timestamp to publish timestamp.", internalBuckets, "venue", "channel")
-	m.RedisPublishErrors = counter("manooch_redis_publish_errors_total",
+	metrics.RedisPublishErrors = counter("manooch_redis_publish_errors_total",
 		"Failed Redis writes.", "venue")
 
-	m.ClockSkewMS = gauge("manooch_clock_skew_ms",
+	metrics.ClockSkewMS = gauge("manooch_clock_skew_ms",
 		"Estimated clock skew against the venue, in milliseconds.", "venue")
-	m.StreamStatus = gauge("manooch_stream_status",
+	metrics.StreamStatus = gauge("manooch_stream_status",
 		"Stream status: 1 healthy, 2 degraded, 3 stale.", "venue", "market_type", "symbol", "channel")
-	m.KeyExpired = counter("manooch_key_expired_total",
+	metrics.KeyExpired = counter("manooch_key_expired_total",
 		"Redis keys that reached their TTL, meaning the stream went quiet.", "venue", "channel")
-	m.Reconnects = counter("manooch_reconnects_total",
+	metrics.Reconnects = counter("manooch_reconnects_total",
 		"Websocket reconnections.", "venue", "socket")
-	m.StreamRestarts = counter("manooch_stream_restarts_total",
+	metrics.StreamRestarts = counter("manooch_stream_restarts_total",
 		"Individual stream restarts.", "venue", "market_type", "symbol", "channel")
-	m.LeakedGoroutines = gauge("manooch_leaked_goroutines",
+	metrics.LeakedGoroutines = gauge("manooch_leaked_goroutines",
 		"Goroutines that did not exit within the shutdown deadline.", "venue")
 
-	m.RateLimitUsed = gauge("manooch_rate_limit_used",
+	metrics.RateLimitUsed = gauge("manooch_rate_limit_used",
 		"Fraction of the venue rate-limit budget in use.", "venue", "kind")
-	m.RateLimitDenied = counter("manooch_rate_limit_denied_total",
+	metrics.RateLimitDenied = counter("manooch_rate_limit_denied_total",
 		"Requests we declined to make to stay inside the budget.", "venue", "kind")
 
-	m.FallbackActive = gauge("manooch_fallback_active",
+	metrics.FallbackActive = gauge("manooch_fallback_active",
 		"1 while a stream is being served by REST fallback rather than its socket.",
 		"venue", "market_type", "symbol", "channel")
-	m.FallbackPolls = counter("manooch_fallback_polls_total",
+	metrics.FallbackPolls = counter("manooch_fallback_polls_total",
 		"REST fallback polls, by result.", "venue", "channel", "result")
 
-	return m
+	return metrics
 }
 
 // Registry exposes the underlying registry.
-func (m *Metrics) Registry() *prometheus.Registry { return m.reg }
+func (metrics *Metrics) Registry() *prometheus.Registry { return metrics.registry }
 
 // Handler serves the Prometheus exposition format for this registry only.
-func (m *Metrics) Handler() http.Handler {
-	return promhttp.HandlerFor(m.reg, promhttp.HandlerOpts{
-		Registry:          m.reg,
+func (metrics *Metrics) Handler() http.Handler {
+	return promhttp.HandlerFor(metrics.registry, promhttp.HandlerOpts{
+		Registry:          metrics.registry,
 		ErrorHandling:     promhttp.ContinueOnError,
 		EnableOpenMetrics: true,
 	})

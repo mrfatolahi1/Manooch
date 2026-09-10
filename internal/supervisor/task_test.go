@@ -44,8 +44,8 @@ func TestTaskRelaunchesAfterBackoff(t *testing.T) {
 	eventually(t, "three relaunches", func() bool { return runs.Load() >= 3 })
 
 	first, second := <-starts, <-starts
-	if gap := second.Sub(first); gap < 15*time.Millisecond {
-		t.Errorf("relaunched after %v, want at least the 20ms backoff", gap)
+	if duration := second.Sub(first); duration < 15*time.Millisecond {
+		t.Errorf("relaunched after %v, want at least the 20ms backoff", duration)
 	}
 	if task.Restarts() == 0 {
 		t.Error("restart count stayed at zero across three relaunches")
@@ -104,7 +104,7 @@ func TestTaskCountsAGoroutineThatIgnoresItsContext(t *testing.T) {
 // rests on. A goroutine parked in Read never observes its context; only closing
 // the connection underneath it returns that call.
 func TestStopGoroutineClosesBeforeWaiting(t *testing.T) {
-	conn := coretest.NewConn()
+	connection := coretest.NewConn()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	exit := make(chan error, 1)
@@ -112,7 +112,7 @@ func TestStopGoroutineClosesBeforeWaiting(t *testing.T) {
 
 	go func() {
 		close(reading)
-		_, _, err := conn.Read(ctx)
+		_, _, err := connection.Read(ctx)
 		exit <- err
 	}()
 	<-reading
@@ -127,10 +127,10 @@ func TestStopGoroutineClosesBeforeWaiting(t *testing.T) {
 	case <-time.After(50 * time.Millisecond):
 	}
 
-	if err := supervisor.StopGoroutine(nil, func() { _ = conn.Close() }, exit, time.Second); err == nil {
+	if err := supervisor.StopGoroutine(nil, func() { _ = connection.Close() }, exit, time.Second); err == nil {
 		t.Error("StopGoroutine reported no error for a read that was closed out")
 	}
-	if !conn.IsClosed() {
+	if !connection.IsClosed() {
 		t.Error("the connection was not closed")
 	}
 }
@@ -138,17 +138,17 @@ func TestStopGoroutineClosesBeforeWaiting(t *testing.T) {
 // TestStopGoroutineReportsALeak: the bounded wait is there because closing is
 // not guaranteed to have worked.
 func TestStopGoroutineReportsALeak(t *testing.T) {
-	conn := coretest.NewConn()
-	conn.Wedge() // Close no longer unblocks Read
+	connection := coretest.NewConn()
+	connection.Wedge() // Close no longer unblocks Read
 
 	exit := make(chan error, 1) // buffered, or the leak would block on the send
 	go func() {
-		_, _, err := conn.Read(context.Background())
+		_, _, err := connection.Read(context.Background())
 		exit <- err
 	}()
 
 	start := time.Now()
-	err := supervisor.StopGoroutine(nil, func() { _ = conn.Close() }, exit, 50*time.Millisecond)
+	err := supervisor.StopGoroutine(nil, func() { _ = connection.Close() }, exit, 50*time.Millisecond)
 	if !errors.Is(err, supervisor.ErrLeaked) {
 		t.Fatalf("StopGoroutine = %v, want ErrLeaked", err)
 	}

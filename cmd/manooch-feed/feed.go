@@ -13,7 +13,7 @@ import (
 	"github.com/you/manooch/internal/fallback"
 	"github.com/you/manooch/internal/health"
 	"github.com/you/manooch/internal/metadata"
-	"github.com/you/manooch/internal/obs"
+	"github.com/you/manooch/internal/observability"
 	"github.com/you/manooch/internal/publish"
 	"github.com/you/manooch/internal/ratelimit"
 	"github.com/you/manooch/internal/supervisor"
@@ -33,27 +33,27 @@ type producers struct {
 // nothing — no socket, no REST call — so an unknown venue or a stream this
 // venue cannot serve fails at startup rather than becoming a key nobody ever
 // writes, which reads exactly like a venue that went quiet.
-func planProducers(cfg *config.Config, log *slog.Logger) (*producers, error) {
-	limiter, err := newLimiter(cfg, log)
+func planProducers(configuration *config.Config, log *slog.Logger) (*producers, error) {
+	limiter, err := newLimiter(configuration, log)
 	if err != nil {
 		return nil, err
 	}
-	a, err := adapter.New(cfg, adapter.Deps{Limiter: limiter})
+	venueAdapter, err := adapter.New(configuration, adapter.Dependencies{Limiter: limiter})
 	if err != nil {
 		return nil, err
 	}
-	specs, err := adapter.Specs(cfg)
+	specifications, err := adapter.Specifications(configuration)
 	if err != nil {
 		return nil, err
 	}
-	plans, err := a.PlanSubscriptions(specs)
+	plans, err := venueAdapter.PlanSubscriptions(specifications)
 	if err != nil {
 		return nil, err
 	}
 	if len(plans) == 0 {
 		return nil, errors.New("config declares no streams")
 	}
-	return &producers{adapter: a, plans: plans, limiter: limiter}, nil
+	return &producers{adapter: venueAdapter, plans: plans, limiter: limiter}, nil
 }
 
 // newLimiter translates the venue's published limits into the budget this
@@ -66,28 +66,28 @@ func planProducers(cfg *config.Config, log *slog.Logger) (*producers, error) {
 // need — because the venue's subscription limit is per connection, which
 // PlanSubscriptions already respects, and inventing a rate for it would be a
 // number nobody chose.
-func newLimiter(cfg *config.Config, log *slog.Logger) (*ratelimit.LocalLimiter, error) {
+func newLimiter(configuration *config.Config, log *slog.Logger) (*ratelimit.LocalLimiter, error) {
 	rest := ratelimit.Bucket{
-		Capacity: cfg.RateLimit.RESTWeightPerMinute,
+		Capacity: configuration.RateLimit.RESTWeightPerMinute,
 		Window:   time.Minute,
-	}.Fraction(cfg.RateLimit.MaxWeightFraction)
+	}.Fraction(configuration.RateLimit.MaxWeightFraction)
 
 	connect := ratelimit.Bucket{
-		Capacity: cfg.RateLimit.WSConnectPer5Min,
+		Capacity: configuration.RateLimit.WebSocketConnectPer5Min,
 		Window:   5 * time.Minute,
-	}.Fraction(cfg.RateLimit.WSConnectFraction)
+	}.Fraction(configuration.RateLimit.WebSocketConnectFraction)
 
 	subscriptions := ratelimit.Bucket{
-		Capacity: cfg.RateLimit.SubscriptionsPerConnection * connect.Capacity,
+		Capacity: configuration.RateLimit.SubscriptionsPerConnection * connect.Capacity,
 		Window:   connect.Window,
 	}
 
 	return ratelimit.New(ratelimit.Options{
-		Venue: cfg.Venue,
+		Venue: configuration.Venue,
 		Buckets: map[ratelimit.LimitKind]ratelimit.Bucket{
-			ratelimit.LimitRESTWeight:    rest,
-			ratelimit.LimitWSConnect:     connect,
-			ratelimit.LimitSubscriptions: subscriptions,
+			ratelimit.LimitRESTWeight:       rest,
+			ratelimit.LimitWebSocketConnect: connect,
+			ratelimit.LimitSubscriptions:    subscriptions,
 		},
 		Log: log,
 	})
@@ -100,45 +100,45 @@ func newLimiter(cfg *config.Config, log *slog.Logger) (*ratelimit.LocalLimiter, 
 // watcher and the socket supervisor. None of them ends the process. A dead
 // socket redials, a dead stream relaunches, and a goroutine that will not come
 // back is counted and reported rather than escalated into a restart.
-func (p *producers) start(ctx context.Context, cfg *config.Config, pub *publish.RedisPublisher, metrics *obs.Metrics, log *slog.Logger) (*sync.WaitGroup, error) {
-	var wg sync.WaitGroup
+func (producers *producers) start(ctx context.Context, configuration *config.Config, publisher *publish.RedisPublisher, metrics *observability.Metrics, log *slog.Logger) (*sync.WaitGroup, error) {
+	var waitGroup sync.WaitGroup
 
 	// The limiter was built before Redis was dialled, because the adapter needed
 	// it. Now there is somewhere to write the advisory key.
-	p.limiter.AttachPublisher(pub)
+	producers.limiter.AttachPublisher(publisher)
 
 	tracker, err := health.New(health.Options{
-		Venue:               cfg.Venue,
-		Publisher:           pub,
+		Venue:               configuration.Venue,
+		Publisher:           publisher,
 		Metrics:             metrics,
 		Log:                 log,
-		HeartbeatInterval:   cfg.Health.HeartbeatInterval.Std(),
-		ClockSkewDegradedMS: cfg.Health.ClockSkewDegradedMS,
-		ClockSkewStaleMS:    cfg.Health.ClockSkewStaleMS,
-		FallbackMaxDuration: cfg.Fallback.MaxDuration.Std(),
-		MetadataRequired:    cfg.Metadata.StartupRequired,
+		HeartbeatInterval:   configuration.Health.HeartbeatInterval.Standard(),
+		ClockSkewDegradedMS: configuration.Health.ClockSkewDegradedMS,
+		ClockSkewStaleMS:    configuration.Health.ClockSkewStaleMS,
+		FallbackMaxDuration: configuration.Fallback.MaxDuration.Standard(),
+		MetadataRequired:    configuration.Metadata.StartupRequired,
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	specs, err := registerStreams(tracker, p.adapter, p.plans)
+	specifications, err := registerStreams(tracker, producers.adapter, producers.plans)
 	if err != nil {
 		return nil, err
 	}
 
 	refresher, err := metadata.New(metadata.Options{
-		Venue:        cfg.Venue,
-		Adapter:      p.adapter,
-		Publisher:    pub,
+		Venue:        configuration.Venue,
+		Adapter:      producers.adapter,
+		Publisher:    publisher,
 		Health:       tracker,
 		Log:          log,
-		Instruments:  instrumentsOf(p.plans),
-		MarketType:   p.plans[0].Specs[0].Instrument.MarketType,
-		Interval:     cfg.Metadata.RefreshInterval.Std(),
-		FetchTimeout: cfg.Metadata.FetchTimeout.Std(),
-		Required:     cfg.Metadata.StartupRequired,
-		Backoff:      backoffPolicy(cfg.Supervisor.SocketReconnectBackoff),
+		Instruments:  instrumentsOf(producers.plans),
+		MarketType:   producers.plans[0].Specifications[0].Instrument.MarketType,
+		Interval:     configuration.Metadata.RefreshInterval.Standard(),
+		FetchTimeout: configuration.Metadata.FetchTimeout.Standard(),
+		Required:     configuration.Metadata.StartupRequired,
+		Backoff:      backoffPolicy(configuration.Supervisor.SocketReconnectBackoff),
 	})
 	if err != nil {
 		return nil, err
@@ -149,26 +149,26 @@ func (p *producers) start(ctx context.Context, cfg *config.Config, pub *publish.
 	// Both are assigned before anything starts, so neither closure can be
 	// called against a nil.
 	var (
-		proc    *supervisor.Process
+		process *supervisor.Process
 		watcher *fallback.Watcher
 	)
 
-	if cfg.Fallback.Enabled {
+	if configuration.Fallback.Enabled {
 		watcher, err = fallback.New(fallback.Options{
-			Venue:              cfg.Venue,
-			Adapter:            p.adapter,
-			Publisher:          pub,
-			Redis:              pub.Redis(),
-			DB:                 cfg.Redis.DB,
+			Venue:              configuration.Venue,
+			Adapter:            producers.adapter,
+			Publisher:          publisher,
+			Redis:              publisher.Redis(),
+			Database:           configuration.Redis.Database,
 			Health:             tracker,
 			Metrics:            metrics,
 			Log:                log,
-			Specs:              specs,
-			MaxConcurrentPolls: cfg.Fallback.MaxConcurrentPolls,
-			PollInterval:       cfg.Fallback.PollInterval.Std(),
-			SweepInterval:      cfg.Fallback.SweepInterval.Std(),
-			MaxDuration:        cfg.Fallback.MaxDuration.Std(),
-			OnExpired:          func(spec core.StreamSpec) { proc.KeyExpired(spec) },
+			Specifications:     specifications,
+			MaxConcurrentPolls: configuration.Fallback.MaxConcurrentPolls,
+			PollInterval:       configuration.Fallback.PollInterval.Standard(),
+			SweepInterval:      configuration.Fallback.SweepInterval.Standard(),
+			MaxDuration:        configuration.Fallback.MaxDuration.Standard(),
+			OnExpired:          func(specification core.StreamSpec) { process.KeyExpired(specification) },
 		})
 		if err != nil {
 			return nil, err
@@ -182,22 +182,22 @@ func (p *producers) start(ctx context.Context, cfg *config.Config, pub *publish.
 		onMessage = watcher.Note
 	}
 
-	proc, err = supervisor.New(supervisor.Options{
-		Venue:         cfg.Venue,
-		Adapter:       p.adapter,
-		Plans:         p.plans,
-		Publisher:     pub,
+	process, err = supervisor.New(supervisor.Options{
+		Venue:         configuration.Venue,
+		Adapter:       producers.adapter,
+		Plans:         producers.plans,
+		Publisher:     publisher,
 		Health:        tracker,
 		Metrics:       metrics,
 		Log:           log,
-		StreamBackoff: backoffPolicy(cfg.Supervisor.StreamRestartBackoff),
-		SocketBackoff: backoffPolicy(cfg.Supervisor.SocketReconnectBackoff),
+		StreamBackoff: backoffPolicy(configuration.Supervisor.StreamRestartBackoff),
+		SocketBackoff: backoffPolicy(configuration.Supervisor.SocketReconnectBackoff),
 		Breaker: transport.BreakerOptions{
-			ConsecutiveFailures: cfg.Supervisor.CircuitBreaker.ConsecutiveFailures,
-			OpenDuration:        cfg.Supervisor.CircuitBreaker.OpenDuration.Std(),
+			ConsecutiveFailures: configuration.Supervisor.CircuitBreaker.ConsecutiveFailures,
+			OpenDuration:        configuration.Supervisor.CircuitBreaker.OpenDuration.Standard(),
 		},
-		LeakTimeout: cfg.Supervisor.GoroutineLeakTimeout.Std(),
-		ConnMaxAge:  cfg.Connection.MaxAge.Std(),
+		LeakTimeout: configuration.Supervisor.GoroutineLeakTimeout.Standard(),
+		ConnMaxAge:  configuration.Connection.MaxAge.Standard(),
 		OnMessage:   onMessage,
 	})
 	if err != nil {
@@ -205,14 +205,14 @@ func (p *producers) start(ctx context.Context, cfg *config.Config, pub *publish.
 	}
 
 	log.Info("venue adapter ready",
-		"sockets", len(p.plans), "streams", len(specs),
-		"rate_limits", p.limiter.KindNames())
+		"sockets", len(producers.plans), "streams", len(specifications),
+		"rate_limits", producers.limiter.KindNames())
 
-	run := func(fn func(context.Context)) {
-		wg.Add(1)
+	run := func(callback func(context.Context)) {
+		waitGroup.Add(1)
 		go func() {
-			defer wg.Done()
-			fn(ctx)
+			defer waitGroup.Done()
+			callback(ctx)
 		}()
 	}
 	// Health first and on its own: it is what publishes STALE while the
@@ -240,12 +240,12 @@ func (p *producers) start(ctx context.Context, cfg *config.Config, pub *publish.
 		streams.Add(1)
 		go func() {
 			defer streams.Done()
-			proc.Run(ctx)
+			process.Run(ctx)
 		}()
 		streams.Wait()
 	})
 
-	return &wg, nil
+	return &waitGroup, nil
 }
 
 // instrumentsOf is the distinct instruments the plans cover, in plan order, so
@@ -256,12 +256,12 @@ func instrumentsOf(plans []core.SocketPlan) []core.InstrumentRef {
 		seen = map[core.InstrumentRef]bool{}
 	)
 	for _, plan := range plans {
-		for _, spec := range plan.Specs {
-			if seen[spec.Instrument] {
+		for _, specification := range plan.Specifications {
+			if seen[specification.Instrument] {
 				continue
 			}
-			seen[spec.Instrument] = true
-			out = append(out, spec.Instrument)
+			seen[specification.Instrument] = true
+			out = append(out, specification.Instrument)
 		}
 	}
 	return out
@@ -270,27 +270,27 @@ func instrumentsOf(plans []core.SocketPlan) []core.InstrumentRef {
 // registerStreams declares every stream to the health tracker before anything
 // runs, so a stream that never receives a byte still has a status to publish
 // rather than being indistinguishable from one nobody configured.
-func registerStreams(tracker *health.Tracker, a core.Adapter, plans []core.SocketPlan) ([]core.StreamSpec, error) {
+func registerStreams(tracker *health.Tracker, adapter core.Adapter, plans []core.SocketPlan) ([]core.StreamSpec, error) {
 	for _, plan := range plans {
-		for _, spec := range plan.Specs {
-			venueSymbol, err := a.VenueSymbol(spec.Instrument)
+		for _, specification := range plan.Specifications {
+			venueSymbol, err := adapter.VenueSymbol(specification.Instrument)
 			if err != nil {
 				return nil, err
 			}
-			tracker.Register(spec, venueSymbol, plan.ID)
+			tracker.Register(specification, venueSymbol, plan.ID)
 		}
 	}
-	return tracker.Specs(), nil
+	return tracker.Specifications(), nil
 }
 
 // backoffPolicy translates one configured backoff block. The transport package
 // is handed values rather than reading config itself, so a test can build a
 // policy without a YAML file.
-func backoffPolicy(c config.BackoffConfig) transport.Policy {
+func backoffPolicy(backoff config.BackoffConfig) transport.Policy {
 	return transport.Policy{
-		Initial:    c.Initial.Std(),
-		Max:        c.Max.Std(),
-		Multiplier: c.Multiplier,
-		Jitter:     c.Jitter,
+		Initial:    backoff.Initial.Standard(),
+		Max:        backoff.Max.Standard(),
+		Multiplier: backoff.Multiplier,
+		Jitter:     backoff.Jitter,
 	}
 }

@@ -21,9 +21,9 @@ import (
 	"github.com/ory/dockertest/v3"
 	"github.com/ory/dockertest/v3/docker"
 	"github.com/redis/go-redis/v9"
-	pb "github.com/you/manooch/gen/manoochv1"
+	"github.com/you/manooch/gen/manoochv1"
 	"github.com/you/manooch/internal/core"
-	"github.com/you/manooch/internal/obs"
+	"github.com/you/manooch/internal/observability"
 	"github.com/you/manooch/internal/publish"
 	"github.com/you/manooch/pkg/price"
 	"google.golang.org/protobuf/proto"
@@ -98,7 +98,7 @@ func newPublisher(t *testing.T) *publish.RedisPublisher {
 		Venue:         "TESTVENUE",
 		InstanceID:    fmt.Sprintf("instance-%d", time.Now().UnixNano()),
 		SchemaVersion: 2,
-		Metrics:       obs.NewMetrics(),
+		Metrics:       observability.NewMetrics(),
 		Logger:        slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})),
 	})
 	if err != nil {
@@ -115,7 +115,7 @@ func newClient(t *testing.T) *redis.Client {
 	return c
 }
 
-func testKey(t *testing.T, ch pb.Channel) string {
+func testKey(t *testing.T, ch manoochv1.Channel) string {
 	t.Helper()
 	// One key per test, so tests cannot see each other's sequence numbers.
 	sym := strings.ToUpper(strings.NewReplacer("/", "_", "-", "_").Replace(t.Name()))
@@ -125,26 +125,26 @@ func testKey(t *testing.T, ch pb.Channel) string {
 		}
 		return -1
 	}, sym)
-	return publish.Key("TESTVENUE", pb.MarketType_MARKET_TYPE_PERP_LINEAR, sym+"_USDT", ch)
+	return publish.Key("TESTVENUE", manoochv1.MarketType_MARKET_TYPE_PERP_LINEAR, sym+"_USDT", ch)
 }
 
-func mark(t *testing.T, symbol string) *pb.MarkPrice {
+func mark(t *testing.T, symbol string) *manoochv1.MarkPrice {
 	t.Helper()
-	ref, err := core.ParseCanonical(symbol, pb.MarketType_MARKET_TYPE_PERP_LINEAR)
+	ref, err := core.ParseCanonical(symbol, manoochv1.MarketType_MARKET_TYPE_PERP_LINEAR)
 	if err != nil {
 		t.Fatal(err)
 	}
 	p, _ := price.ParsePrice("68432.15")
 	now := time.Now()
-	return &pb.MarkPrice{
-		Env: &pb.Envelope{
+	return &manoochv1.MarkPrice{
+		Env: &manoochv1.Envelope{
 			Venue:          "TESTVENUE",
 			Instrument:     ref.Proto("TESTUSDT"),
-			Channel:        pb.Channel_CHANNEL_MARK_PRICE,
+			Channel:        manoochv1.Channel_CHANNEL_MARK_PRICE,
 			ExchangeTimeNs: now.Add(-10 * time.Millisecond).UnixNano(),
 			RecvTimeNs:     now.UnixNano(),
-			Source:         pb.Source_SOURCE_WEBSOCKET,
-			Status:         pb.Status_STATUS_HEALTHY,
+			Source:         manoochv1.Source_SOURCE_WEBSOCKET,
+			Status:         manoochv1.Status_STATUS_HEALTHY,
 		},
 		MarkPrice: int64(p),
 	}
@@ -158,7 +158,7 @@ func TestPublishWritesKeyAndChannel(t *testing.T) {
 	ctx := context.Background()
 	pub := newPublisher(t)
 	rdb := newClient(t)
-	key := testKey(t, pb.Channel_CHANNEL_MARK_PRICE)
+	key := testKey(t, manoochv1.Channel_CHANNEL_MARK_PRICE)
 
 	sub := rdb.Subscribe(ctx, key)
 	defer sub.Close()
@@ -189,7 +189,7 @@ func TestPublishWritesKeyAndChannel(t *testing.T) {
 	// Delivered over Pub/Sub.
 	select {
 	case m := <-sub.Channel():
-		var got pb.MarkPrice
+		var got manoochv1.MarkPrice
 		if err := proto.Unmarshal([]byte(m.Payload), &got); err != nil {
 			t.Fatalf("unmarshal published: %v", err)
 		}
@@ -205,7 +205,7 @@ func TestPublishWritesKeyAndChannel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET %s: %v", key, err)
 	}
-	var cached pb.MarkPrice
+	var cached manoochv1.MarkPrice
 	if err := proto.Unmarshal(b, &cached); err != nil {
 		t.Fatalf("unmarshal cached: %v", err)
 	}
@@ -220,7 +220,7 @@ func TestKeyExpiresAndNotifies(t *testing.T) {
 	ctx := context.Background()
 	pub := newPublisher(t)
 	rdb := newClient(t)
-	key := testKey(t, pb.Channel_CHANNEL_MARK_PRICE)
+	key := testKey(t, manoochv1.Channel_CHANNEL_MARK_PRICE)
 
 	events := rdb.PSubscribe(ctx, fmt.Sprintf("__keyevent@%d__:expired", testDB))
 	defer events.Close()
@@ -260,7 +260,7 @@ func TestZeroTTLPersists(t *testing.T) {
 	ctx := context.Background()
 	pub := newPublisher(t)
 	rdb := newClient(t)
-	key := testKey(t, pb.Channel_CHANNEL_METADATA)
+	key := testKey(t, manoochv1.Channel_CHANNEL_METADATA)
 
 	if err := pub.Publish(ctx, key, mark(t, "BTC_USDT"), 0); err != nil {
 		t.Fatalf("Publish: %v", err)
@@ -284,7 +284,7 @@ func TestPublishSeqIsGapFree(t *testing.T) {
 	ctx := context.Background()
 	pub := newPublisher(t)
 	rdb := newClient(t)
-	key := testKey(t, pb.Channel_CHANNEL_MARK_PRICE)
+	key := testKey(t, manoochv1.Channel_CHANNEL_MARK_PRICE)
 
 	const n = 10_000
 	sub := rdb.Subscribe(ctx, key)
@@ -310,7 +310,7 @@ func TestPublishSeqIsGapFree(t *testing.T) {
 	for last < n {
 		select {
 		case m := <-ch:
-			var got pb.MarkPrice
+			var got manoochv1.MarkPrice
 			if err := proto.Unmarshal([]byte(m.Payload), &got); err != nil {
 				t.Fatalf("unmarshal: %v", err)
 			}
@@ -329,7 +329,7 @@ func TestPublishSeqIsGapFree(t *testing.T) {
 // from ten thousand missed messages.
 func TestInstanceIDDistinguishesRestartFromDrop(t *testing.T) {
 	ctx := context.Background()
-	key := testKey(t, pb.Channel_CHANNEL_MARK_PRICE)
+	key := testKey(t, manoochv1.Channel_CHANNEL_MARK_PRICE)
 
 	first := newPublisher(t)
 	msg := mark(t, "BTC_USDT")
@@ -363,7 +363,7 @@ func TestNoEvictionSurfacesWriteErrors(t *testing.T) {
 	ctx := context.Background()
 	pub := newPublisher(t)
 	rdb := newClient(t)
-	key := testKey(t, pb.Channel_CHANNEL_MARK_PRICE)
+	key := testKey(t, manoochv1.Channel_CHANNEL_MARK_PRICE)
 
 	t.Cleanup(func() {
 		bg := context.Background()

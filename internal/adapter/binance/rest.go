@@ -9,7 +9,7 @@ import (
 	"net/url"
 	"time"
 
-	pb "github.com/you/manooch/gen/manoochv1"
+	"github.com/you/manooch/gen/manoochv1"
 	"github.com/you/manooch/internal/core"
 	"github.com/you/manooch/internal/ratelimit"
 	"github.com/you/manooch/pkg/price"
@@ -51,127 +51,127 @@ type premiumIndex struct {
 //
 // The returned message is SOURCE_REST, so a consumer can tell a polled value
 // from a streamed one; nothing else about it differs.
-func (a *Adapter) FetchOnce(ctx context.Context, spec core.StreamSpec) ([]core.Message, error) {
-	if err := a.checkSpec(spec); err != nil {
+func (adapter *Adapter) FetchOnce(ctx context.Context, specification core.StreamSpec) ([]core.Message, error) {
+	if err := adapter.checkSpecification(specification); err != nil {
 		return nil, err
 	}
-	if a.opts.RESTEndpoint == "" {
+	if adapter.options.RESTEndpoint == "" {
 		return nil, fmt.Errorf("binance: no rest endpoint")
 	}
-	sym, err := a.VenueSymbol(spec.Instrument)
+	symbol, err := adapter.VenueSymbol(specification.Instrument)
 	if err != nil {
 		return nil, err
 	}
 	// The poll does not happen if there is no budget for it. The caller marks
 	// the stream STALE, which is the truth: nothing is refreshing that key.
-	if err := a.opts.Limiter.Allow(ctx, Venue, ratelimit.LimitRESTWeight, a.RESTCost(core.OpFetchOnce)); err != nil {
-		return nil, fmt.Errorf("binance: fetch %s: %w", spec, err)
+	if err := adapter.options.Limiter.Allow(ctx, Venue, ratelimit.LimitRESTWeight, adapter.RESTCost(core.OpFetchOnce)); err != nil {
+		return nil, fmt.Errorf("binance: fetch %s: %w", specification, err)
 	}
 
-	u := a.opts.RESTEndpoint + premiumIndexPath + "?" + url.Values{"symbol": {sym}}.Encode()
-	body, recvNs, err := a.get(ctx, u, maxRESTBodyBytes, spec.Channel, sym)
+	u := adapter.options.RESTEndpoint + premiumIndexPath + "?" + url.Values{"symbol": {symbol}}.Encode()
+	body, receivedNs, err := adapter.get(ctx, u, maxRESTBodyBytes, specification.Channel, symbol)
 	if err != nil {
-		return nil, fmt.Errorf("binance: fetch %s: %w", spec, err)
+		return nil, fmt.Errorf("binance: fetch %s: %w", specification, err)
 	}
 
-	var pi premiumIndex
-	if err := json.Unmarshal(body, &pi); err != nil {
-		return nil, core.NewParseError(core.KindJSON, spec.Channel, sym, err, "response is not json")
+	var premiumIndex premiumIndex
+	if err := json.Unmarshal(body, &premiumIndex); err != nil {
+		return nil, core.NewParseError(core.KindJSON, specification.Channel, symbol, err, "response is not json")
 	}
-	if pi.TimeMS <= 0 {
-		return nil, core.NewParseError(core.KindField, spec.Channel, sym, nil, "time is %d", pi.TimeMS)
+	if premiumIndex.TimeMS <= 0 {
+		return nil, core.NewParseError(core.KindField, specification.Channel, symbol, nil, "time is %d", premiumIndex.TimeMS)
 	}
 
-	msg, err := a.restMessage(spec, pi, recvNs)
+	message, err := adapter.restMessage(specification, premiumIndex, receivedNs)
 	if err != nil {
 		return nil, err
 	}
-	if msg == nil {
+	if message == nil {
 		return nil, nil
 	}
-	return []core.Message{*msg}, nil
+	return []core.Message{*message}, nil
 }
 
 // restMessage builds the one message the caller asked for. A nil message with
 // a nil error is a value the venue did not answer with — an empty funding rate
 // on a delivery symbol — which is missing data, not a zero.
-func (a *Adapter) restMessage(spec core.StreamSpec, pi premiumIndex, recvNs int64) (*core.Message, error) {
-	ref := spec.Instrument
-	instrument := ref.Proto(pi.Symbol)
-	exchangeNs := msToNs(pi.TimeMS)
+func (adapter *Adapter) restMessage(specification core.StreamSpec, premiumIndex premiumIndex, receivedNs int64) (*core.Message, error) {
+	reference := specification.Instrument
+	instrument := reference.Proto(premiumIndex.Symbol)
+	exchangeNs := millisecondsToNanoseconds(premiumIndex.TimeMS)
 
-	build := func(ch pb.Channel, payload func(*pb.Envelope) proto.Message) *core.Message {
-		m := a.message(ref, instrument, ch, exchangeNs, recvNs, payload)
-		m.Proto.(interface{ GetEnv() *pb.Envelope }).GetEnv().Source = pb.Source_SOURCE_REST
-		return &m
+	build := func(channel manoochv1.Channel, payload func(*manoochv1.Envelope) proto.Message) *core.Message {
+		message := adapter.message(reference, instrument, channel, exchangeNs, receivedNs, payload)
+		message.Proto.(interface{ GetEnv() *manoochv1.Envelope }).GetEnv().Source = manoochv1.Source_SOURCE_REST
+		return &message
 	}
 
-	switch spec.Channel {
-	case pb.Channel_CHANNEL_MARK_PRICE:
-		v, err := price.ParsePrice(pi.MarkPrice)
+	switch specification.Channel {
+	case manoochv1.Channel_CHANNEL_MARK_PRICE:
+		v, err := price.ParsePrice(premiumIndex.MarkPrice)
 		if err != nil {
-			return nil, numericError(spec.Channel, pi.Symbol, "markPrice", pi.MarkPrice, err)
+			return nil, numericError(specification.Channel, premiumIndex.Symbol, "markPrice", premiumIndex.MarkPrice, err)
 		}
-		return build(spec.Channel, func(env *pb.Envelope) proto.Message {
-			return &pb.MarkPrice{Env: env, MarkPrice: int64(v)}
+		return build(specification.Channel, func(envelope *manoochv1.Envelope) proto.Message {
+			return &manoochv1.MarkPrice{Env: envelope, MarkPrice: int64(v)}
 		}), nil
 
-	case pb.Channel_CHANNEL_INDEX_PRICE:
-		v, err := price.ParsePrice(pi.IndexPrice)
+	case manoochv1.Channel_CHANNEL_INDEX_PRICE:
+		v, err := price.ParsePrice(premiumIndex.IndexPrice)
 		if err != nil {
-			return nil, numericError(spec.Channel, pi.Symbol, "indexPrice", pi.IndexPrice, err)
+			return nil, numericError(specification.Channel, premiumIndex.Symbol, "indexPrice", premiumIndex.IndexPrice, err)
 		}
-		return build(spec.Channel, func(env *pb.Envelope) proto.Message {
-			return &pb.IndexPrice{Env: env, IndexPrice: int64(v)}
+		return build(specification.Channel, func(envelope *manoochv1.Envelope) proto.Message {
+			return &manoochv1.IndexPrice{Env: envelope, IndexPrice: int64(v)}
 		}), nil
 
-	case pb.Channel_CHANNEL_FUNDING:
-		if pi.LastFundingRate == "" || pi.NextFundingTime <= 0 {
+	case manoochv1.Channel_CHANNEL_FUNDING:
+		if premiumIndex.LastFundingRate == "" || premiumIndex.NextFundingTime <= 0 {
 			return nil, nil
 		}
-		v, err := price.ParseRate(pi.LastFundingRate)
+		v, err := price.ParseRate(premiumIndex.LastFundingRate)
 		if err != nil {
-			return nil, numericError(spec.Channel, pi.Symbol, "lastFundingRate", pi.LastFundingRate, err)
+			return nil, numericError(specification.Channel, premiumIndex.Symbol, "lastFundingRate", premiumIndex.LastFundingRate, err)
 		}
-		next := msToNs(pi.NextFundingTime)
-		return build(spec.Channel, func(env *pb.Envelope) proto.Message {
-			return &pb.Funding{Env: env, FundingRate: int64(v), NextFundingTimeNs: next}
+		next := millisecondsToNanoseconds(premiumIndex.NextFundingTime)
+		return build(specification.Channel, func(envelope *manoochv1.Envelope) proto.Message {
+			return &manoochv1.Funding{Env: envelope, FundingRate: int64(v), NextFundingTimeNs: next}
 		}), nil
 	}
-	return nil, fmt.Errorf("binance: %s: channel %s is not served", spec, core.ChannelName(spec.Channel))
+	return nil, fmt.Errorf("binance: %s: channel %s is not served", specification, core.ChannelName(specification.Channel))
 }
 
 // get performs one public GET and returns the body with the instant it landed.
 //
-// recvNs is stamped the moment the body is read and before anything looks at
-// it, for the same reason the websocket read loop stamps it there: measured
+// receivedNs is stamped the moment the body is read and before anything looks
+// at it, for the same reason the websocket read loop stamps it there: measured
 // after parsing it would fold our own work into the venue's latency.
 //
 // A non-200 comes back as a ParseError of kind venue carrying Binance's own
 // code and message, which is the difference between a fixable error and
 // "HTTP 400".
-func (a *Adapter) get(ctx context.Context, url string, limit int64, ch pb.Channel, symbol string) ([]byte, int64, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+func (adapter *Adapter) get(ctx context.Context, url string, limit int64, channel manoochv1.Channel, symbol string) ([]byte, int64, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, 0, err
 	}
-	resp, err := a.opts.HTTPClient.Do(req)
+	response, err := adapter.options.HTTPClient.Do(request)
 	if err != nil {
 		return nil, 0, err
 	}
-	defer resp.Body.Close()
+	defer response.Body.Close()
 
-	body, readErr := io.ReadAll(io.LimitReader(resp.Body, limit))
-	recvNs := time.Now().UnixNano()
+	body, readErr := io.ReadAll(io.LimitReader(response.Body, limit))
+	receivedNs := time.Now().UnixNano()
 
 	if readErr != nil {
-		return nil, recvNs, readErr
+		return nil, receivedNs, readErr
 	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, recvNs, core.NewParseError(core.KindVenue, ch, symbol, nil,
-			"%s: %s", resp.Status, truncate(string(body), 200))
+	if response.StatusCode != http.StatusOK {
+		return nil, receivedNs, core.NewParseError(core.KindVenue, channel, symbol, nil,
+			"%s: %s", response.Status, truncate(string(body), 200))
 	}
-	return body, recvNs, nil
+	return body, receivedNs, nil
 }
 
 // truncate bounds an error body so one bad response cannot fill the log.

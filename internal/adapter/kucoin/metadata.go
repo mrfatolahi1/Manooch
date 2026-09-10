@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	pb "github.com/you/manooch/gen/manoochv1"
+	"github.com/you/manooch/gen/manoochv1"
 	"github.com/you/manooch/internal/core"
 	"github.com/you/manooch/internal/ratelimit"
 	"github.com/you/manooch/pkg/price"
@@ -36,51 +36,51 @@ type contract struct {
 //
 // A contract that is served but whose numbers do not parse is an error. That is
 // the difference between "not ours" and "ours, and wrong".
-func (a *Adapter) FetchMetadata(ctx context.Context, mt pb.MarketType) ([]*pb.InstrumentMeta, error) {
-	if mt != MarketType {
-		return nil, fmt.Errorf("kucoin: market type %s is not served", core.MarketTypeName(mt))
+func (adapter *Adapter) FetchMetadata(ctx context.Context, marketType manoochv1.MarketType) ([]*manoochv1.InstrumentMeta, error) {
+	if marketType != MarketType {
+		return nil, fmt.Errorf("kucoin: market type %s is not served", core.MarketTypeName(marketType))
 	}
-	if a.opts.RESTEndpoint == "" {
+	if adapter.options.RESTEndpoint == "" {
 		return nil, fmt.Errorf("kucoin: no rest endpoint")
 	}
-	if err := a.opts.Limiter.Allow(ctx, Venue, ratelimit.LimitRESTWeight, a.RESTCost(core.OpFetchMetadata)); err != nil {
+	if err := adapter.options.Limiter.Allow(ctx, Venue, ratelimit.LimitRESTWeight, adapter.RESTCost(core.OpFetchMetadata)); err != nil {
 		return nil, fmt.Errorf("kucoin: fetch metadata: %w", err)
 	}
 
-	data, recvNs, err := a.get(ctx, a.opts.RESTEndpoint+contractsPath,
-		maxMetadataBodyBytes, pb.Channel_CHANNEL_METADATA, "")
+	data, receivedNs, err := adapter.get(ctx, adapter.options.RESTEndpoint+contractsPath,
+		maxMetadataBodyBytes, manoochv1.Channel_CHANNEL_METADATA, "")
 	if err != nil {
 		return nil, fmt.Errorf("kucoin: fetch metadata: %w", err)
 	}
 
 	var contracts []contract
 	if err := json.Unmarshal(data, &contracts); err != nil {
-		return nil, core.NewParseError(core.KindJSON, pb.Channel_CHANNEL_METADATA, "", err, "contracts are not json")
+		return nil, core.NewParseError(core.KindJSON, manoochv1.Channel_CHANNEL_METADATA, "", err, "contracts are not json")
 	}
 
-	out := make([]*pb.InstrumentMeta, 0, len(contracts))
-	for _, c := range contracts {
-		if c.IsInverse || c.Type != contractPerpetualLinear {
+	out := make([]*manoochv1.InstrumentMeta, 0, len(contracts))
+	for _, contract := range contracts {
+		if contract.IsInverse || contract.Type != contractPerpetualLinear {
 			continue
 		}
-		ref, err := a.ParseVenueSymbol(c.Symbol, mt)
+		reference, err := adapter.ParseVenueSymbol(contract.Symbol, marketType)
 		if err != nil {
 			continue // a quote asset we have no mapping for
 		}
-		meta, err := a.instrumentMeta(ref, c, recvNs)
+		metadata, err := adapter.instrumentMetadata(reference, contract, receivedNs)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, meta)
+		out = append(out, metadata)
 	}
 	if len(out) == 0 {
-		return nil, core.NewParseError(core.KindField, pb.Channel_CHANNEL_METADATA, "", nil,
+		return nil, core.NewParseError(core.KindField, manoochv1.Channel_CHANNEL_METADATA, "", nil,
 			"contracts listed no linear perpetuals")
 	}
 	return out, nil
 }
 
-// instrumentMeta converts one contract into the normalized message.
+// instrumentMetadata converts one contract into the normalized message.
 //
 // exchange_time_ns is left at zero: this endpoint carries no server time, and
 // stamping our own clock into a field named for the venue's would be a value we
@@ -89,79 +89,79 @@ func (a *Adapter) FetchMetadata(ctx context.Context, mt pb.MarketType) ([]*pb.In
 // min_notional is left at zero for the same reason: KuCoin publishes no minimum
 // notional for futures, and a number computed from tick size and lot size would
 // look exactly like one the venue had given us.
-func (a *Adapter) instrumentMeta(ref core.InstrumentRef, c contract, recvNs int64) (*pb.InstrumentMeta, error) {
-	meta := &pb.InstrumentMeta{
-		Env: &pb.Envelope{
+func (adapter *Adapter) instrumentMetadata(reference core.InstrumentRef, contract contract, receivedNs int64) (*manoochv1.InstrumentMeta, error) {
+	metadata := &manoochv1.InstrumentMeta{
+		Env: &manoochv1.Envelope{
 			Venue:      Venue,
-			Instrument: ref.Proto(c.Symbol),
-			Channel:    pb.Channel_CHANNEL_METADATA,
-			RecvTimeNs: recvNs,
-			Source:     pb.Source_SOURCE_REST,
-			Status:     pb.Status_STATUS_HEALTHY,
+			Instrument: reference.Proto(contract.Symbol),
+			Channel:    manoochv1.Channel_CHANNEL_METADATA,
+			RecvTimeNs: receivedNs,
+			Source:     manoochv1.Source_SOURCE_REST,
+			Status:     manoochv1.Status_STATUS_HEALTHY,
 		},
-		Active:        c.Status == statusOpen,
-		LastRefreshNs: recvNs,
+		Active:        contract.Status == statusOpen,
+		LastRefreshNs: receivedNs,
 	}
 
-	tick, err := parseMetaPrice(c.Symbol, "tickSize", c.TickSize)
+	tick, err := parseMetadataPrice(contract.Symbol, "tickSize", contract.TickSize)
 	if err != nil {
 		return nil, err
 	}
-	meta.TickSize = tick
+	metadata.TickSize = tick
 
 	for _, f := range []struct {
-		dst   *int64
-		name  string
-		value json.Number
+		destination *int64
+		name        string
+		value       json.Number
 	}{
 		// lotSize is the minimum order increment, in contracts. It is both the
 		// step and the minimum here: KuCoin publishes no separate minimum.
-		{&meta.LotSize, "lotSize", c.LotSize},
-		{&meta.MinSize, "lotSize", c.LotSize},
-		{&meta.MaxSize, "maxOrderQty", c.MaxOrderQty},
+		{&metadata.LotSize, "lotSize", contract.LotSize},
+		{&metadata.MinSize, "lotSize", contract.LotSize},
+		{&metadata.MaxSize, "maxOrderQty", contract.MaxOrderQty},
 		// A KuCoin futures contract is a fixed amount of the base asset, not
 		// one unit of it. Without this every order size downstream is wrong by
 		// the multiplier, silently.
-		{&meta.ContractMultiplier, "multiplier", c.Multiplier},
+		{&metadata.ContractMultiplier, "multiplier", contract.Multiplier},
 	} {
-		v, err := parseMetaSize(c.Symbol, f.name, f.value)
+		v, err := parseMetadataSize(contract.Symbol, f.name, f.value)
 		if err != nil {
 			return nil, err
 		}
-		*f.dst = v
+		*f.destination = v
 	}
 
-	if meta.TickSize <= 0 || meta.LotSize <= 0 || meta.ContractMultiplier <= 0 {
+	if metadata.TickSize <= 0 || metadata.LotSize <= 0 || metadata.ContractMultiplier <= 0 {
 		// Precision a consumer cannot round an order to, or a multiplier it
 		// cannot size one with, is not metadata.
-		return nil, core.NewParseError(core.KindField, pb.Channel_CHANNEL_METADATA, c.Symbol, nil,
+		return nil, core.NewParseError(core.KindField, manoochv1.Channel_CHANNEL_METADATA, contract.Symbol, nil,
 			"tick_size %d lot_size %d contract_multiplier %d",
-			meta.TickSize, meta.LotSize, meta.ContractMultiplier)
+			metadata.TickSize, metadata.LotSize, metadata.ContractMultiplier)
 	}
-	return meta, nil
+	return metadata, nil
 }
 
-// parseMetaPrice and parseMetaSize hand the venue's digit string straight to
-// pkg/price. An absent number is zero rather than an error: a field the venue
-// did not send is missing data, not a malformed value.
-func parseMetaPrice(symbol, field string, value json.Number) (int64, error) {
+// parseMetadataPrice and parseMetadataSize hand the venue's digit string
+// straight to pkg/price. An absent number is zero rather than an error: a field
+// the venue did not send is missing data, not a malformed value.
+func parseMetadataPrice(symbol, field string, value json.Number) (int64, error) {
 	if value.String() == "" {
 		return 0, nil
 	}
 	v, err := price.ParsePrice(value.String())
 	if err != nil {
-		return 0, numericError(pb.Channel_CHANNEL_METADATA, symbol, field, value.String(), err)
+		return 0, numericError(manoochv1.Channel_CHANNEL_METADATA, symbol, field, value.String(), err)
 	}
 	return int64(v), nil
 }
 
-func parseMetaSize(symbol, field string, value json.Number) (int64, error) {
+func parseMetadataSize(symbol, field string, value json.Number) (int64, error) {
 	if value.String() == "" {
 		return 0, nil
 	}
 	v, err := price.ParseSize(value.String())
 	if err != nil {
-		return 0, numericError(pb.Channel_CHANNEL_METADATA, symbol, field, value.String(), err)
+		return 0, numericError(manoochv1.Channel_CHANNEL_METADATA, symbol, field, value.String(), err)
 	}
 	return int64(v), nil
 }

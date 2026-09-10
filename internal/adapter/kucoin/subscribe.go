@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	pb "github.com/you/manooch/gen/manoochv1"
+	"github.com/you/manooch/gen/manoochv1"
 	"github.com/you/manooch/internal/core"
 	"github.com/you/manooch/internal/ratelimit"
 )
@@ -47,8 +47,8 @@ type control struct {
 // connection whose subscriptions are live. A socket that opened but was refused
 // its topics is indistinguishable, from above, from a venue that has gone
 // quiet — and it would sit there consuming a connection slot forever.
-func (a *Adapter) subscribe(ctx context.Context, conn core.Conn, topics []string) error {
-	if err := a.opts.Limiter.Allow(ctx, Venue, ratelimit.LimitSubscriptions, len(topics)); err != nil {
+func (adapter *Adapter) subscribe(ctx context.Context, connection core.Conn, topics []string) error {
+	if err := adapter.options.Limiter.Allow(ctx, Venue, ratelimit.LimitSubscriptions, len(topics)); err != nil {
 		return fmt.Errorf("kucoin: subscribe: %w", err)
 	}
 
@@ -57,48 +57,48 @@ func (a *Adapter) subscribe(ctx context.Context, conn core.Conn, topics []string
 	// closing the socket, the same way the supervisor enforces every other one.
 	// A watchdog rather than a read deadline because the read below has to
 	// survive several frames, not one.
-	stop := a.closeAfter(ctx, conn, a.opts.SubscribeTimeout)
+	stop := adapter.closeAfter(ctx, connection, adapter.options.SubscribeTimeout)
 	defer stop()
 
 	pending := make(map[string]string, len(topics))
 	for i, topic := range topics {
 		id := fmt.Sprintf("sub-%d", i)
-		req, err := json.Marshal(subscribeRequest{ID: id, Type: typeSubscribe, Topic: topic, Response: true})
+		request, err := json.Marshal(subscribeRequest{ID: id, Type: typeSubscribe, Topic: topic, Response: true})
 		if err != nil {
 			return fmt.Errorf("kucoin: subscribe %s: %w", topic, err)
 		}
-		if err := conn.Write(ctx, req); err != nil {
+		if err := connection.Write(ctx, request); err != nil {
 			return fmt.Errorf("kucoin: subscribe %s: %w", topic, err)
 		}
 		pending[id] = topic
 	}
 
 	for len(pending) > 0 {
-		frame, _, err := conn.Read(ctx)
+		frame, _, err := connection.Read(ctx)
 		if err != nil {
 			return fmt.Errorf("kucoin: waiting for %d subscription acks: %w", len(pending), err)
 		}
 
-		var c control
-		if err := json.Unmarshal(frame, &c); err != nil {
+		var control control
+		if err := json.Unmarshal(frame, &control); err != nil {
 			// A frame we cannot read during the handshake is a protocol
 			// problem, not a data problem: the whole dial fails rather than
 			// leaving a socket half subscribed.
-			return core.NewParseError(core.KindJSON, pb.Channel_CHANNEL_UNSPECIFIED, "", err, "handshake frame is not json")
+			return core.NewParseError(core.KindJSON, manoochv1.Channel_CHANNEL_UNSPECIFIED, "", err, "handshake frame is not json")
 		}
-		switch c.Type {
+		switch control.Type {
 		case typeAck:
-			delete(pending, c.ID)
+			delete(pending, control.ID)
 		case typeError:
 			// The id may name none of our subscriptions, in which case the
 			// venue is refusing something else about the connection and the
 			// dial still has to fail.
-			topic, ok := pending[c.ID]
+			topic, ok := pending[control.ID]
 			if !ok {
 				topic = "connection"
 			}
-			return core.NewParseError(core.KindVenue, pb.Channel_CHANNEL_UNSPECIFIED, "", nil,
-				"subscribe %s refused: code %d: %s", topic, c.Code, c.Data)
+			return core.NewParseError(core.KindVenue, manoochv1.Channel_CHANNEL_UNSPECIFIED, "", nil,
+				"subscribe %s refused: code %d: %s", topic, control.Code, control.Data)
 		}
 		// Everything else — the welcome frame, a data message that arrived
 		// before its ack — is dropped. A mark price lost during a handshake is
@@ -107,24 +107,24 @@ func (a *Adapter) subscribe(ctx context.Context, conn core.Conn, topics []string
 	return nil
 }
 
-// closeAfter closes conn once d has passed or ctx has ended, and returns a
-// function that calls off the watchdog.
+// closeAfter closes the connection once duration has passed or ctx has ended,
+// and returns a function that calls off the watchdog.
 //
 // It exists because core.Conn.Read is documented not to watch the caller's
 // context: a socket that opens and then says nothing would otherwise park the
 // dial forever, holding a connection slot the venue counts and delivering
 // nothing to anyone.
-func (a *Adapter) closeAfter(ctx context.Context, conn core.Conn, d time.Duration) func() {
+func (adapter *Adapter) closeAfter(ctx context.Context, connection core.Conn, duration time.Duration) func() {
 	done := make(chan struct{})
 	go func() {
-		timer := time.NewTimer(d)
+		timer := time.NewTimer(duration)
 		defer timer.Stop()
 		select {
 		case <-done:
 		case <-timer.C:
-			_ = conn.Close()
+			_ = connection.Close()
 		case <-ctx.Done():
-			_ = conn.Close()
+			_ = connection.Close()
 		}
 	}()
 	return func() { close(done) }

@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/you/manooch/gen/manoochv1"
+	"github.com/you/manooch/gen/manoochv1"
 	"github.com/you/manooch/internal/adapter/binance"
 	"github.com/you/manooch/internal/core"
 	"github.com/you/manooch/pkg/price"
@@ -23,8 +23,8 @@ import (
 // and every freshness number the service publishes is wrong with it.
 const maxClockSkew = 5000 * time.Millisecond
 
-// firstFrameDeadline bounds the wait for real data. The stream is documented
-// to update once a second; fifteen seconds is a dead connection, not a slow one.
+// firstFrameDeadline bounds the wait for real data. The stream is documented to
+// update once a second; fifteen seconds is a dead connection, not a slow one.
 const firstFrameDeadline = 15 * time.Second
 
 // TestLiveMarkPriceStream connects to Binance, subscribes to one symbol, and
@@ -33,7 +33,7 @@ func TestLiveMarkPriceStream(t *testing.T) {
 	a := newAdapter(t)
 
 	plans, err := a.PlanSubscriptions([]core.StreamSpec{
-		spec(t, "BTC_USDT", pb.Channel_CHANNEL_MARK_PRICE),
+		spec(t, "BTC_USDT", manoochv1.Channel_CHANNEL_MARK_PRICE),
 	})
 	if err != nil {
 		t.Fatalf("PlanSubscriptions: %v", err)
@@ -68,13 +68,13 @@ func TestLiveMarkPriceStream(t *testing.T) {
 			t.Errorf("one frame produced %d messages, want 3", len(msgs))
 		}
 		for _, m := range msgs {
-			env := m.Proto.(interface{ GetEnv() *pb.Envelope }).GetEnv()
+			env := m.Proto.(interface{ GetEnv() *manoochv1.Envelope }).GetEnv()
 
 			skew := time.Duration(env.ExchangeTimeNs-env.RecvTimeNs) * time.Nanosecond
 			if skew < -maxClockSkew || skew > maxClockSkew {
 				t.Errorf("%s: clock skew %v exceeds %v", m.Key, skew, maxClockSkew)
 			}
-			if env.Status != pb.Status_STATUS_HEALTHY {
+			if env.Status != manoochv1.Status_STATUS_HEALTHY {
 				t.Errorf("%s: status = %v", m.Key, env.Status)
 			}
 			if env.VenueSeqPresent {
@@ -85,16 +85,16 @@ func TestLiveMarkPriceStream(t *testing.T) {
 			}
 		}
 
-		mark, ok := msgs[0].Proto.(*pb.MarkPrice)
+		mark, ok := msgs[0].Proto.(*manoochv1.MarkPrice)
 		if !ok {
-			t.Fatalf("first message is %T, want *pb.MarkPrice", msgs[0].Proto)
+			t.Fatalf("first message is %T, want *manoochv1.MarkPrice", msgs[0].Proto)
 		}
 		if mark.MarkPrice <= 0 {
 			t.Fatalf("mark price = %d", mark.MarkPrice)
 		}
 		t.Logf("BTC_USDT mark %s, index %s, skew %v",
 			price.Price(mark.MarkPrice),
-			price.Price(msgs[1].Proto.(*pb.IndexPrice).IndexPrice),
+			price.Price(msgs[1].Proto.(*manoochv1.IndexPrice).IndexPrice),
 			time.Duration(mark.Env.ExchangeTimeNs-mark.Env.RecvTimeNs))
 		return
 	}
@@ -112,7 +112,7 @@ func TestLiveServerPingsAreAnswered(t *testing.T) {
 	a := newAdapter(t)
 
 	plans, err := a.PlanSubscriptions([]core.StreamSpec{
-		spec(t, "BTC_USDT", pb.Channel_CHANNEL_MARK_PRICE),
+		spec(t, "BTC_USDT", manoochv1.Channel_CHANNEL_MARK_PRICE),
 	})
 	if err != nil {
 		t.Fatal(err)

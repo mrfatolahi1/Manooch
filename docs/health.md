@@ -60,7 +60,7 @@ refresh failing in the background. See [`metadata.md`](metadata.md).
 | `New(Options) (*Tracker, error)` | Builds the tracker; publishes nothing yet |
 | `Options` | Venue, `publish.Publisher`, metrics, logger, heartbeat, skew thresholds, `FallbackMaxDuration`, `MetadataRequired`, `Now` |
 | `Tracker.Register(spec, venueSymbol, socketID)` | Declares a stream and seeds its status |
-| `Tracker.Specs()` | Every registered stream, for the fallback sweep |
+| `Tracker.Specifications()` | Every registered stream, for the fallback sweep |
 | `Tracker.Run(ctx)` | The heartbeat loop |
 | `Tracker.Status(spec)` | `(status, reason)` for one stream, stamped before each publish |
 | `Tracker.VenueStatus()` | The connection-level answer |

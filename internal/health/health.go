@@ -19,9 +19,9 @@ import (
 	"sync"
 	"time"
 
-	pb "github.com/you/manooch/gen/manoochv1"
+	"github.com/you/manooch/gen/manoochv1"
 	"github.com/you/manooch/internal/core"
-	"github.com/you/manooch/internal/obs"
+	"github.com/you/manooch/internal/observability"
 	"github.com/you/manooch/internal/publish"
 )
 
@@ -45,7 +45,7 @@ type Options struct {
 	// Publisher writes the health keys. Required.
 	Publisher publish.Publisher
 
-	Metrics *obs.Metrics
+	Metrics *observability.Metrics
 	Log     *slog.Logger
 
 	// HeartbeatInterval is how often health republishes with nothing changed.
@@ -77,10 +77,10 @@ type Options struct {
 // plus the configured thresholds. It is safe for concurrent use: one goroutine
 // per stream reports into it, and the heartbeat reads all of them.
 type Tracker struct {
-	opts Options
-	now  func() time.Time
+	options Options
+	now     func() time.Time
 
-	mu      sync.Mutex
+	mutex   sync.Mutex
 	streams map[core.StreamSpec]*stream
 	// order is registration order, so the heartbeat publishes the same
 	// instruments in the same sequence every tick.
@@ -93,18 +93,18 @@ type Tracker struct {
 	metadataOK     bool
 	metadataReason string
 
-	venueStatus pb.Status
+	venueStatus manoochv1.Status
 	venueReason string
 }
 
 // A stream is one (instrument, channel): exactly one Redis key.
 type stream struct {
-	spec     core.StreamSpec
-	inst     *instrument
-	socketID string
+	specification core.StreamSpec
+	instrument    *instrument
+	socketID      string
 
 	lastMessage time.Time
-	source      pb.Source
+	source      manoochv1.Source
 	restarts    uint32
 
 	// expired is set when the key reached its TTL and cleared by the next
@@ -117,18 +117,18 @@ type stream struct {
 	fallbackSince time.Time
 	fallbackFail  string
 
-	status pb.Status
+	status manoochv1.Status
 	reason string
 }
 
 // An instrument groups the channels that share one health key.
 type instrument struct {
-	ref         core.InstrumentRef
+	reference   core.InstrumentRef
 	venueSymbol string
 	key         string
 	streams     []*stream
 
-	status pb.Status
+	status manoochv1.Status
 	reason string
 }
 
@@ -139,92 +139,92 @@ type socket struct {
 }
 
 // New builds a tracker. It publishes nothing until Run or an event says so.
-func New(opts Options) (*Tracker, error) {
-	if opts.Venue == "" {
+func New(options Options) (*Tracker, error) {
+	if options.Venue == "" {
 		return nil, fmt.Errorf("health: no venue")
 	}
-	if opts.Publisher == nil {
+	if options.Publisher == nil {
 		return nil, fmt.Errorf("health: no publisher")
 	}
-	if opts.Log == nil {
+	if options.Log == nil {
 		return nil, fmt.Errorf("health: no logger")
 	}
-	if opts.HeartbeatInterval <= 0 {
-		return nil, fmt.Errorf("health: heartbeat interval is %v", opts.HeartbeatInterval)
+	if options.HeartbeatInterval <= 0 {
+		return nil, fmt.Errorf("health: heartbeat interval is %v", options.HeartbeatInterval)
 	}
-	if opts.Now == nil {
-		opts.Now = time.Now
+	if options.Now == nil {
+		options.Now = time.Now
 	}
 	return &Tracker{
-		opts:           opts,
-		now:            opts.Now,
+		options:        options,
+		now:            options.Now,
 		streams:        map[core.StreamSpec]*stream{},
 		sockets:        map[string]*socket{},
-		metadataOK:     !opts.MetadataRequired,
+		metadataOK:     !options.MetadataRequired,
 		metadataReason: "metadata unavailable",
-		venueStatus:    pb.Status_STATUS_UNSPECIFIED,
+		venueStatus:    manoochv1.Status_STATUS_UNSPECIFIED,
 	}, nil
 }
 
 // Register declares a stream before anything reports on it. socketID names the
 // connection that carries it, so a socket-level event reaches the right
-// streams. An unregistered spec is ignored everywhere else: a stream nobody
-// declared has no key, and inventing one would publish a status for a stream
-// that does not exist.
-func (t *Tracker) Register(spec core.StreamSpec, venueSymbol, socketID string) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+// streams. An unregistered specification is ignored everywhere else: a stream
+// nobody declared has no key, and inventing one would publish a status for a
+// stream that does not exist.
+func (tracker *Tracker) Register(specification core.StreamSpec, venueSymbol, socketID string) {
+	tracker.mutex.Lock()
+	defer tracker.mutex.Unlock()
 
-	if _, dup := t.streams[spec]; dup {
+	if _, duplicate := tracker.streams[specification]; duplicate {
 		return
 	}
-	inst := t.instrumentFor(spec.Instrument, venueSymbol)
-	s := &stream{
-		spec:     spec,
-		inst:     inst,
-		socketID: socketID,
-		source:   pb.Source_SOURCE_WEBSOCKET,
-		status:   pb.Status_STATUS_UNSPECIFIED,
+	tracked := tracker.instrumentFor(specification.Instrument, venueSymbol)
+	newStream := &stream{
+		specification: specification,
+		instrument:    tracked,
+		socketID:      socketID,
+		source:        manoochv1.Source_SOURCE_WEBSOCKET,
+		status:        manoochv1.Status_STATUS_UNSPECIFIED,
 	}
-	inst.streams = append(inst.streams, s)
-	t.streams[spec] = s
+	tracked.streams = append(tracked.streams, newStream)
+	tracker.streams[specification] = newStream
 
-	if _, ok := t.sockets[socketID]; !ok && socketID != "" {
-		t.sockets[socketID] = &socket{id: socketID, state: SocketDialing, reason: "not yet connected"}
+	if _, ok := tracker.sockets[socketID]; !ok && socketID != "" {
+		tracker.sockets[socketID] = &socket{id: socketID, state: SocketDialing, reason: "not yet connected"}
 	}
 	// Seeded now rather than on the first event, so a stream that never
 	// receives anything still has a status to publish.
-	t.refresh([]*instrument{inst})
+	tracker.refresh([]*instrument{tracked})
 }
 
 // instrumentFor finds or creates the instrument a stream belongs to. Callers
 // hold the mutex.
-func (t *Tracker) instrumentFor(ref core.InstrumentRef, venueSymbol string) *instrument {
-	for _, in := range t.order {
-		if in.ref == ref {
-			return in
+func (tracker *Tracker) instrumentFor(reference core.InstrumentRef, venueSymbol string) *instrument {
+	for _, instrument := range tracker.order {
+		if instrument.reference == reference {
+			return instrument
 		}
 	}
-	in := &instrument{
-		ref:         ref,
+	instrument := &instrument{
+		reference:   reference,
 		venueSymbol: venueSymbol,
-		key:         publish.Key(t.opts.Venue, ref.MarketType, ref.Canonical(), pb.Channel_CHANNEL_HEALTH),
-		status:      pb.Status_STATUS_UNSPECIFIED,
+		key:         publish.Key(tracker.options.Venue, reference.MarketType, reference.Canonical(), manoochv1.Channel_CHANNEL_HEALTH),
+		status:      manoochv1.Status_STATUS_UNSPECIFIED,
 	}
-	t.order = append(t.order, in)
-	return in
+	tracker.order = append(tracker.order, instrument)
+	return instrument
 }
 
-// Specs is every registered stream, in registration order. The fallback watcher
-// needs the set to sweep.
-func (t *Tracker) Specs() []core.StreamSpec {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+// Specifications is every registered stream, in registration order. The
+// fallback watcher needs the set to sweep.
+func (tracker *Tracker) Specifications() []core.StreamSpec {
+	tracker.mutex.Lock()
+	defer tracker.mutex.Unlock()
 
-	out := make([]core.StreamSpec, 0, len(t.streams))
-	for _, in := range t.order {
-		for _, s := range in.streams {
-			out = append(out, s.spec)
+	out := make([]core.StreamSpec, 0, len(tracker.streams))
+	for _, instrument := range tracker.order {
+		for _, stream := range instrument.streams {
+			out = append(out, stream.specification)
 		}
 	}
 	return out
@@ -235,49 +235,49 @@ func (t *Tracker) Specs() []core.StreamSpec {
 // Received records a websocket message for a stream. It is called before the
 // message is stamped and published, so the status that goes onto the wire
 // already reflects the arrival rather than the state it recovered from.
-func (t *Tracker) Received(spec core.StreamSpec) {
-	t.update(func() []*instrument {
-		s := t.streams[spec]
-		if s == nil {
+func (tracker *Tracker) Received(specification core.StreamSpec) {
+	tracker.update(func() []*instrument {
+		stream := tracker.streams[specification]
+		if stream == nil {
 			return nil
 		}
-		s.lastMessage = t.now()
-		s.source = pb.Source_SOURCE_WEBSOCKET
-		s.expired = false
-		s.rejected = false
-		return []*instrument{s.inst}
+		stream.lastMessage = tracker.now()
+		stream.source = manoochv1.Source_SOURCE_WEBSOCKET
+		stream.expired = false
+		stream.rejected = false
+		return []*instrument{stream.instrument}
 	})
 }
 
 // Polled records a successful REST fallback poll. The stream stays on fallback
 // — only a websocket message ends that — but the value is current again, so a
 // previous poll failure is cleared.
-func (t *Tracker) Polled(spec core.StreamSpec) {
-	t.update(func() []*instrument {
-		s := t.streams[spec]
-		if s == nil {
+func (tracker *Tracker) Polled(specification core.StreamSpec) {
+	tracker.update(func() []*instrument {
+		stream := tracker.streams[specification]
+		if stream == nil {
 			return nil
 		}
-		s.lastMessage = t.now()
-		s.source = pb.Source_SOURCE_REST
-		s.expired = false
-		s.fallbackFail = ""
-		return []*instrument{s.inst}
+		stream.lastMessage = tracker.now()
+		stream.source = manoochv1.Source_SOURCE_REST
+		stream.expired = false
+		stream.fallbackFail = ""
+		return []*instrument{stream.instrument}
 	})
 }
 
 // KeyExpired records that a stream's Redis key reached its TTL.
-func (t *Tracker) KeyExpired(spec core.StreamSpec) {
-	t.update(func() []*instrument {
-		s := t.streams[spec]
-		if s == nil {
+func (tracker *Tracker) KeyExpired(specification core.StreamSpec) {
+	tracker.update(func() []*instrument {
+		stream := tracker.streams[specification]
+		if stream == nil {
 			return nil
 		}
-		if t.opts.Metrics != nil && !s.expired {
-			t.opts.Metrics.KeyExpired.WithLabelValues(t.opts.Venue, core.ChannelName(spec.Channel)).Inc()
+		if tracker.options.Metrics != nil && !stream.expired {
+			tracker.options.Metrics.KeyExpired.WithLabelValues(tracker.options.Venue, core.ChannelName(specification.Channel)).Inc()
 		}
-		s.expired = true
-		return []*instrument{s.inst}
+		stream.expired = true
+		return []*instrument{stream.instrument}
 	})
 }
 
@@ -286,19 +286,19 @@ func (t *Tracker) KeyExpired(spec core.StreamSpec) {
 // channel: attributing it to none of them would leave a venue sending shapes we
 // cannot read looking perfectly healthy for as long as the keys stay inside
 // their TTL.
-func (t *Tracker) FrameRejected(socketID string) {
-	t.update(func() []*instrument {
+func (tracker *Tracker) FrameRejected(socketID string) {
+	tracker.update(func() []*instrument {
 		var touched []*instrument
-		for _, in := range t.order {
+		for _, instrument := range tracker.order {
 			marked := false
-			for _, s := range in.streams {
-				if s.socketID == socketID && !s.rejected {
-					s.rejected = true
+			for _, stream := range instrument.streams {
+				if stream.socketID == socketID && !stream.rejected {
+					stream.rejected = true
 					marked = true
 				}
 			}
 			if marked {
-				touched = append(touched, in)
+				touched = append(touched, instrument)
 			}
 		}
 		return touched
@@ -306,33 +306,33 @@ func (t *Tracker) FrameRejected(socketID string) {
 }
 
 // StreamRestarted counts a tier-1 restart of one stream's goroutine.
-func (t *Tracker) StreamRestarted(spec core.StreamSpec) {
-	t.update(func() []*instrument {
-		s := t.streams[spec]
-		if s == nil {
+func (tracker *Tracker) StreamRestarted(specification core.StreamSpec) {
+	tracker.update(func() []*instrument {
+		stream := tracker.streams[specification]
+		if stream == nil {
 			return nil
 		}
-		s.restarts++
-		if t.opts.Metrics != nil {
-			t.opts.Metrics.StreamRestarts.WithLabelValues(
-				t.opts.Venue, core.MarketTypeName(s.spec.Instrument.MarketType),
-				s.spec.Instrument.Canonical(), core.ChannelName(s.spec.Channel)).Inc()
+		stream.restarts++
+		if tracker.options.Metrics != nil {
+			tracker.options.Metrics.StreamRestarts.WithLabelValues(
+				tracker.options.Venue, core.MarketTypeName(stream.specification.Instrument.MarketType),
+				stream.specification.Instrument.Canonical(), core.ChannelName(stream.specification.Channel)).Inc()
 		}
-		return []*instrument{s.inst}
+		return []*instrument{stream.instrument}
 	})
 }
 
 // FallbackEngaged records that a stream is now served by REST polling.
-func (t *Tracker) FallbackEngaged(spec core.StreamSpec) {
-	t.update(func() []*instrument {
-		s := t.streams[spec]
-		if s == nil || !s.fallbackSince.IsZero() {
+func (tracker *Tracker) FallbackEngaged(specification core.StreamSpec) {
+	tracker.update(func() []*instrument {
+		stream := tracker.streams[specification]
+		if stream == nil || !stream.fallbackSince.IsZero() {
 			return nil
 		}
-		s.fallbackSince = t.now()
-		s.source = pb.Source_SOURCE_REST
-		t.setFallbackMetric(s, 1)
-		return []*instrument{s.inst}
+		stream.fallbackSince = tracker.now()
+		stream.source = manoochv1.Source_SOURCE_REST
+		tracker.setFallbackMetric(stream, 1)
+		return []*instrument{stream.instrument}
 	})
 }
 
@@ -340,29 +340,29 @@ func (t *Tracker) FallbackEngaged(spec core.StreamSpec) {
 // errored, the venue answered nothing usable, or the concurrency cap was
 // reached. The stream goes STALE. A fallback that quietly stops is the failure
 // this whole service exists to prevent.
-func (t *Tracker) FallbackFailed(spec core.StreamSpec, reason string) {
-	t.update(func() []*instrument {
-		s := t.streams[spec]
-		if s == nil || s.fallbackFail == reason {
+func (tracker *Tracker) FallbackFailed(specification core.StreamSpec, reason string) {
+	tracker.update(func() []*instrument {
+		stream := tracker.streams[specification]
+		if stream == nil || stream.fallbackFail == reason {
 			return nil
 		}
-		s.fallbackFail = reason
-		return []*instrument{s.inst}
+		stream.fallbackFail = reason
+		return []*instrument{stream.instrument}
 	})
 }
 
 // FallbackDisengaged records that a stream is back on its socket.
-func (t *Tracker) FallbackDisengaged(spec core.StreamSpec) {
-	t.update(func() []*instrument {
-		s := t.streams[spec]
-		if s == nil || (s.fallbackSince.IsZero() && s.fallbackFail == "") {
+func (tracker *Tracker) FallbackDisengaged(specification core.StreamSpec) {
+	tracker.update(func() []*instrument {
+		stream := tracker.streams[specification]
+		if stream == nil || (stream.fallbackSince.IsZero() && stream.fallbackFail == "") {
 			return nil
 		}
-		s.fallbackSince = time.Time{}
-		s.fallbackFail = ""
-		s.source = pb.Source_SOURCE_WEBSOCKET
-		t.setFallbackMetric(s, 0)
-		return []*instrument{s.inst}
+		stream.fallbackSince = time.Time{}
+		stream.fallbackFail = ""
+		stream.source = manoochv1.Source_SOURCE_WEBSOCKET
+		tracker.setFallbackMetric(stream, 0)
+		return []*instrument{stream.instrument}
 	})
 }
 
@@ -376,45 +376,45 @@ func (t *Tracker) FallbackDisengaged(spec core.StreamSpec) {
 // not be taken STALE by a refresh that happens to be failing.
 //
 // reason is ignored when ok is true.
-func (t *Tracker) MetadataState(ok bool, reason string) {
-	if !t.opts.MetadataRequired {
+func (tracker *Tracker) MetadataState(ok bool, reason string) {
+	if !tracker.options.MetadataRequired {
 		return
 	}
-	t.update(func() []*instrument {
-		if t.metadataOK == ok && (ok || t.metadataReason == reason) {
+	tracker.update(func() []*instrument {
+		if tracker.metadataOK == ok && (ok || tracker.metadataReason == reason) {
 			return nil
 		}
-		t.metadataOK = ok
+		tracker.metadataOK = ok
 		if !ok {
-			t.metadataReason = reason
+			tracker.metadataReason = reason
 		}
-		return t.order
+		return tracker.order
 	})
 }
 
 // SocketState records what one connection is doing. state is one of
 // SocketConnected, SocketDialing or SocketCircuitOpen.
-func (t *Tracker) SocketState(socketID, state, reason string) {
-	t.update(func() []*instrument {
-		sock := t.sockets[socketID]
-		if sock == nil {
-			sock = &socket{id: socketID}
-			t.sockets[socketID] = sock
+func (tracker *Tracker) SocketState(socketID, state, reason string) {
+	tracker.update(func() []*instrument {
+		tracked := tracker.sockets[socketID]
+		if tracked == nil {
+			tracked = &socket{id: socketID}
+			tracker.sockets[socketID] = tracked
 		}
-		if sock.state == state && sock.reason == reason {
+		if tracked.state == state && tracked.reason == reason {
 			return nil
 		}
-		sock.state, sock.reason = state, reason
-		return t.instrumentsOn(socketID)
+		tracked.state, tracked.reason = state, reason
+		return tracker.instrumentsOn(socketID)
 	})
 }
 
 // Reconnected counts one completed reconnection of a socket.
-func (t *Tracker) Reconnected(socketID string) {
-	t.update(func() []*instrument {
-		t.reconnects++
-		if t.opts.Metrics != nil {
-			t.opts.Metrics.Reconnects.WithLabelValues(t.opts.Venue, socketID).Inc()
+func (tracker *Tracker) Reconnected(socketID string) {
+	tracker.update(func() []*instrument {
+		tracker.reconnects++
+		if tracker.options.Metrics != nil {
+			tracker.options.Metrics.Reconnects.WithLabelValues(tracker.options.Venue, socketID).Inc()
 		}
 		return nil
 	})
@@ -424,16 +424,16 @@ func (t *Tracker) Reconnected(socketID string) {
 // milliseconds, signed: a venue clock ahead of ours reads positive. The sign is
 // kept because losing it hides which way the two disagree, and every freshness
 // number depends on the answer.
-func (t *Tracker) ClockSkew(ms int64) {
-	t.update(func() []*instrument {
-		if t.skewMS == ms {
+func (tracker *Tracker) ClockSkew(milliseconds int64) {
+	tracker.update(func() []*instrument {
+		if tracker.skewMS == milliseconds {
 			return nil
 		}
-		t.skewMS = ms
-		if t.opts.Metrics != nil {
-			t.opts.Metrics.ClockSkewMS.WithLabelValues(t.opts.Venue).Set(float64(ms))
+		tracker.skewMS = milliseconds
+		if tracker.options.Metrics != nil {
+			tracker.options.Metrics.ClockSkewMS.WithLabelValues(tracker.options.Venue).Set(float64(milliseconds))
 		}
-		return t.order
+		return tracker.order
 	})
 }
 
@@ -442,17 +442,17 @@ func (t *Tracker) ClockSkew(ms int64) {
 // There is no self-kill, so leaks accumulate; making them visible is the price
 // of never restarting the process. Any value above zero holds the venue at
 // DEGRADED until an operator does something about it.
-func (t *Tracker) Leaked(n int) {
-	t.update(func() []*instrument {
-		if n == t.leaked {
+func (tracker *Tracker) Leaked(n int) {
+	tracker.update(func() []*instrument {
+		if n == tracker.leaked {
 			return nil
 		}
-		if n > t.leaked {
-			t.opts.Log.Error("goroutines leaked", "count", n)
+		if n > tracker.leaked {
+			tracker.options.Log.Error("goroutines leaked", "count", n)
 		}
-		t.leaked = n
-		if t.opts.Metrics != nil {
-			t.opts.Metrics.LeakedGoroutines.WithLabelValues(t.opts.Venue).Set(float64(n))
+		tracker.leaked = n
+		if tracker.options.Metrics != nil {
+			tracker.options.Metrics.LeakedGoroutines.WithLabelValues(tracker.options.Venue).Set(float64(n))
 		}
 		return nil
 	})
@@ -462,26 +462,26 @@ func (t *Tracker) Leaked(n int) {
 
 // Status is a stream's current status and, when it is not healthy, why. It is
 // what a producer stamps into the envelope immediately before publishing.
-func (t *Tracker) Status(spec core.StreamSpec) (pb.Status, string) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+func (tracker *Tracker) Status(specification core.StreamSpec) (manoochv1.Status, string) {
+	tracker.mutex.Lock()
+	defer tracker.mutex.Unlock()
 
-	s := t.streams[spec]
-	if s == nil {
+	stream := tracker.streams[specification]
+	if stream == nil {
 		// A stream nobody registered has no state to judge. STALE is the only
 		// safe answer: the alternative publishes data as healthy on the
 		// strength of knowing nothing about it.
-		return pb.Status_STATUS_STALE, "stream not registered"
+		return manoochv1.Status_STATUS_STALE, "stream not registered"
 	}
-	return t.compute(s)
+	return tracker.compute(stream)
 }
 
 // VenueStatus is the connection-level status: socket state, clock skew and
 // leaked goroutines, none of which belong to any one stream.
-func (t *Tracker) VenueStatus() (pb.Status, string) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.computeVenue()
+func (tracker *Tracker) VenueStatus() (manoochv1.Status, string) {
+	tracker.mutex.Lock()
+	defer tracker.mutex.Unlock()
+	return tracker.computeVenue()
 }
 
 // compute derives a stream's status from its state. Callers hold the mutex.
@@ -489,87 +489,87 @@ func (t *Tracker) VenueStatus() (pb.Status, string) {
 // STALE is tested before DEGRADED throughout: the two differ by whether a
 // consumer may trade on the data, so a stream that qualifies for both must
 // report the one that says stop.
-func (t *Tracker) compute(s *stream) (pb.Status, string) {
-	sock := t.sockets[s.socketID]
+func (tracker *Tracker) compute(stream *stream) (manoochv1.Status, string) {
+	socket := tracker.sockets[stream.socketID]
 
 	// --- STALE: do not trade this venue.
-	if !t.metadataOK {
+	if !tracker.metadataOK {
 		// First, and above everything else: without metadata there is no
 		// price being published at all, so no other reason has happened yet.
-		return pb.Status_STATUS_STALE, t.metadataReason
+		return manoochv1.Status_STATUS_STALE, tracker.metadataReason
 	}
-	if sock != nil && sock.state == SocketCircuitOpen {
-		return pb.Status_STATUS_STALE, "circuit open"
+	if socket != nil && socket.state == SocketCircuitOpen {
+		return manoochv1.Status_STATUS_STALE, "circuit open"
 	}
-	if s.fallbackFail != "" {
-		return pb.Status_STATUS_STALE, s.fallbackFail
+	if stream.fallbackFail != "" {
+		return manoochv1.Status_STATUS_STALE, stream.fallbackFail
 	}
-	if !s.fallbackSince.IsZero() && t.opts.FallbackMaxDuration > 0 &&
-		t.now().Sub(s.fallbackSince) >= t.opts.FallbackMaxDuration {
+	if !stream.fallbackSince.IsZero() && tracker.options.FallbackMaxDuration > 0 &&
+		tracker.now().Sub(stream.fallbackSince) >= tracker.options.FallbackMaxDuration {
 		// Long-running fallback is a failure, not a steady state.
-		return pb.Status_STATUS_STALE, "rest fallback for " + t.now().Sub(s.fallbackSince).Truncate(time.Second).String()
+		return manoochv1.Status_STATUS_STALE, "rest fallback for " + tracker.now().Sub(stream.fallbackSince).Truncate(time.Second).String()
 	}
-	if t.opts.ClockSkewStaleMS > 0 && abs(t.skewMS) >= t.opts.ClockSkewStaleMS {
-		return pb.Status_STATUS_STALE, fmt.Sprintf("clock skew %dms", t.skewMS)
+	if tracker.options.ClockSkewStaleMS > 0 && absolute(tracker.skewMS) >= tracker.options.ClockSkewStaleMS {
+		return manoochv1.Status_STATUS_STALE, fmt.Sprintf("clock skew %dms", tracker.skewMS)
 	}
-	if s.expired {
+	if stream.expired {
 		// The key reached its TTL and no fallback picked it up. Whatever a
 		// consumer holds is older than the venue's own cadence allows.
-		return pb.Status_STATUS_STALE, "key expired"
+		return manoochv1.Status_STATUS_STALE, "key expired"
 	}
 
 	// --- DEGRADED: usable, but you should know.
-	if !s.fallbackSince.IsZero() {
-		return pb.Status_STATUS_DEGRADED, "rest fallback"
+	if !stream.fallbackSince.IsZero() {
+		return manoochv1.Status_STATUS_DEGRADED, "rest fallback"
 	}
-	if sock != nil && sock.state != SocketConnected {
-		return pb.Status_STATUS_DEGRADED, sock.reason
+	if socket != nil && socket.state != SocketConnected {
+		return manoochv1.Status_STATUS_DEGRADED, socket.reason
 	}
-	if t.opts.ClockSkewDegradedMS > 0 && abs(t.skewMS) >= t.opts.ClockSkewDegradedMS {
-		return pb.Status_STATUS_DEGRADED, fmt.Sprintf("clock skew %dms", t.skewMS)
+	if tracker.options.ClockSkewDegradedMS > 0 && absolute(tracker.skewMS) >= tracker.options.ClockSkewDegradedMS {
+		return manoochv1.Status_STATUS_DEGRADED, fmt.Sprintf("clock skew %dms", tracker.skewMS)
 	}
-	if s.rejected {
-		return pb.Status_STATUS_DEGRADED, "frame rejected"
+	if stream.rejected {
+		return manoochv1.Status_STATUS_DEGRADED, "frame rejected"
 	}
-	return pb.Status_STATUS_HEALTHY, ""
+	return manoochv1.Status_STATUS_HEALTHY, ""
 }
 
 // computeVenue derives the connection-level status. Callers hold the mutex.
-func (t *Tracker) computeVenue() (pb.Status, string) {
-	if !t.metadataOK {
-		return pb.Status_STATUS_STALE, t.metadataReason
+func (tracker *Tracker) computeVenue() (manoochv1.Status, string) {
+	if !tracker.metadataOK {
+		return manoochv1.Status_STATUS_STALE, tracker.metadataReason
 	}
-	ids := t.socketIDs()
+	ids := tracker.socketIDs()
 	for _, id := range ids {
-		if t.sockets[id].state == SocketCircuitOpen {
-			return pb.Status_STATUS_STALE, "circuit open: " + id
+		if tracker.sockets[id].state == SocketCircuitOpen {
+			return manoochv1.Status_STATUS_STALE, "circuit open: " + id
 		}
 	}
-	if t.opts.ClockSkewStaleMS > 0 && abs(t.skewMS) >= t.opts.ClockSkewStaleMS {
-		return pb.Status_STATUS_STALE, fmt.Sprintf("clock skew %dms", t.skewMS)
+	if tracker.options.ClockSkewStaleMS > 0 && absolute(tracker.skewMS) >= tracker.options.ClockSkewStaleMS {
+		return manoochv1.Status_STATUS_STALE, fmt.Sprintf("clock skew %dms", tracker.skewMS)
 	}
-	if t.leaked > 0 {
-		return pb.Status_STATUS_DEGRADED, fmt.Sprintf("leaked goroutines: %d", t.leaked)
+	if tracker.leaked > 0 {
+		return manoochv1.Status_STATUS_DEGRADED, fmt.Sprintf("leaked goroutines: %d", tracker.leaked)
 	}
 	for _, id := range ids {
-		if sock := t.sockets[id]; sock.state != SocketConnected {
-			return pb.Status_STATUS_DEGRADED, fmt.Sprintf("socket %s %s: %s", id, sock.state, sock.reason)
+		if socket := tracker.sockets[id]; socket.state != SocketConnected {
+			return manoochv1.Status_STATUS_DEGRADED, fmt.Sprintf("socket %s %s: %s", id, socket.state, socket.reason)
 		}
 	}
-	if t.opts.ClockSkewDegradedMS > 0 && abs(t.skewMS) >= t.opts.ClockSkewDegradedMS {
-		return pb.Status_STATUS_DEGRADED, fmt.Sprintf("clock skew %dms", t.skewMS)
+	if tracker.options.ClockSkewDegradedMS > 0 && absolute(tracker.skewMS) >= tracker.options.ClockSkewDegradedMS {
+		return manoochv1.Status_STATUS_DEGRADED, fmt.Sprintf("clock skew %dms", tracker.skewMS)
 	}
-	return pb.Status_STATUS_HEALTHY, ""
+	return manoochv1.Status_STATUS_HEALTHY, ""
 }
 
 // worst folds an instrument's channels into the one status its health key
 // carries: the worst of them, named by the channel it came from. Callers hold
 // the mutex.
-func (in *instrument) worst() (pb.Status, string) {
-	status, reason := pb.Status_STATUS_HEALTHY, ""
-	for _, s := range in.streams {
-		if s.status > status {
-			status, reason = s.status, core.ChannelName(s.spec.Channel)+": "+s.reason
+func (instrument *instrument) worst() (manoochv1.Status, string) {
+	status, reason := manoochv1.Status_STATUS_HEALTHY, ""
+	for _, stream := range instrument.streams {
+		if stream.status > status {
+			status, reason = stream.status, core.ChannelName(stream.specification.Channel)+": "+stream.reason
 		}
 	}
 	return status, reason
@@ -577,12 +577,12 @@ func (in *instrument) worst() (pb.Status, string) {
 
 // instrumentsOn is every instrument with a stream on one socket. Callers hold
 // the mutex.
-func (t *Tracker) instrumentsOn(socketID string) []*instrument {
+func (tracker *Tracker) instrumentsOn(socketID string) []*instrument {
 	var out []*instrument
-	for _, in := range t.order {
-		for _, s := range in.streams {
-			if s.socketID == socketID {
-				out = append(out, in)
+	for _, instrument := range tracker.order {
+		for _, stream := range instrument.streams {
+			if stream.socketID == socketID {
+				out = append(out, instrument)
 				break
 			}
 		}
@@ -592,31 +592,32 @@ func (t *Tracker) instrumentsOn(socketID string) []*instrument {
 
 // socketIDs is the socket set in registration order, so a status reason names
 // the same socket run after run rather than whichever the map yielded first.
-func (t *Tracker) socketIDs() []string {
+func (tracker *Tracker) socketIDs() []string {
 	seen := map[string]bool{}
 	var out []string
-	for _, in := range t.order {
-		for _, s := range in.streams {
-			if s.socketID != "" && !seen[s.socketID] {
-				seen[s.socketID] = true
-				out = append(out, s.socketID)
+	for _, instrument := range tracker.order {
+		for _, stream := range instrument.streams {
+			if stream.socketID != "" && !seen[stream.socketID] {
+				seen[stream.socketID] = true
+				out = append(out, stream.socketID)
 			}
 		}
 	}
 	return out
 }
 
-// setFallbackMetric records whether a stream is on REST. Callers hold the mutex.
-func (t *Tracker) setFallbackMetric(s *stream, v float64) {
-	if t.opts.Metrics == nil {
+// setFallbackMetric records whether a stream is on REST. Callers hold the
+// mutex.
+func (tracker *Tracker) setFallbackMetric(stream *stream, v float64) {
+	if tracker.options.Metrics == nil {
 		return
 	}
-	t.opts.Metrics.FallbackActive.WithLabelValues(
-		t.opts.Venue, core.MarketTypeName(s.spec.Instrument.MarketType),
-		s.spec.Instrument.Canonical(), core.ChannelName(s.spec.Channel)).Set(v)
+	tracker.options.Metrics.FallbackActive.WithLabelValues(
+		tracker.options.Venue, core.MarketTypeName(stream.specification.Instrument.MarketType),
+		stream.specification.Instrument.Canonical(), core.ChannelName(stream.specification.Channel)).Set(v)
 }
 
-func abs(v int64) int64 {
+func absolute(v int64) int64 {
 	if v < 0 {
 		return -v
 	}
@@ -635,16 +636,16 @@ func abs(v int64) int64 {
 // transition a consumer learns about one heartbeat late is a transition they
 // traded through. There are a handful an hour, so the Redis round trip is not
 // on any hot path.
-func (t *Tracker) update(mutate func() []*instrument) {
-	t.mu.Lock()
-	moved := t.refresh(mutate())
-	t.mu.Unlock()
+func (tracker *Tracker) update(mutate func() []*instrument) {
+	tracker.mutex.Lock()
+	moved := tracker.refresh(mutate())
+	tracker.mutex.Unlock()
 
 	// Background rather than a request context: these are called from whatever
 	// goroutine noticed the change, including one that is shutting down, and
 	// the last transition before an exit is the one worth having. The Redis
 	// client's own write timeout bounds it.
-	t.write(context.Background(), moved)
+	tracker.write(context.Background(), moved)
 }
 
 // refresh recomputes status for the given instruments and returns a snapshot
@@ -653,59 +654,59 @@ func (t *Tracker) update(mutate func() []*instrument) {
 // Passing t.order refreshes everything, which the heartbeat does: some
 // transitions are purely the passage of time — fallback crossing its maximum
 // duration is the one that matters — and no event fires for those.
-func (t *Tracker) refresh(touched []*instrument) []snapshot {
+func (tracker *Tracker) refresh(touched []*instrument) []snapshot {
 	// A venue-level change moves every stream, so it is recomputed on every
 	// update rather than only when an event says to.
-	prevStatus, prevReason := t.venueStatus, t.venueReason
-	t.venueStatus, t.venueReason = t.computeVenue()
+	prevStatus, prevReason := tracker.venueStatus, tracker.venueReason
+	tracker.venueStatus, tracker.venueReason = tracker.computeVenue()
 
 	var moved []snapshot
-	for _, in := range touched {
-		for _, s := range in.streams {
-			status, reason := t.compute(s)
-			if status == s.status && reason == s.reason {
+	for _, instrument := range touched {
+		for _, stream := range instrument.streams {
+			status, reason := tracker.compute(stream)
+			if status == stream.status && reason == stream.reason {
 				continue
 			}
-			prev := s.status
-			s.status, s.reason = status, reason
-			t.exportStatus(s)
-			t.logTransition(s, prev)
+			prev := stream.status
+			stream.status, stream.reason = status, reason
+			tracker.exportStatus(stream)
+			tracker.logTransition(stream, prev)
 		}
-		status, reason := in.worst()
-		if status == in.status && reason == in.reason {
+		status, reason := instrument.worst()
+		if status == instrument.status && reason == instrument.reason {
 			continue
 		}
-		in.status, in.reason = status, reason
-		moved = append(moved, t.snapshotInstrument(in))
+		instrument.status, instrument.reason = status, reason
+		moved = append(moved, tracker.snapshotInstrument(instrument))
 	}
 
-	if t.venueStatus != prevStatus || t.venueReason != prevReason {
-		if prevStatus != pb.Status_STATUS_UNSPECIFIED {
-			t.opts.Log.Info("venue status",
+	if tracker.venueStatus != prevStatus || tracker.venueReason != prevReason {
+		if prevStatus != manoochv1.Status_STATUS_UNSPECIFIED {
+			tracker.options.Log.Info("venue status",
 				"from", core.StatusName(prevStatus),
-				"to", core.StatusName(t.venueStatus),
-				"reason", t.venueReason)
+				"to", core.StatusName(tracker.venueStatus),
+				"reason", tracker.venueReason)
 		}
-		moved = append(moved, t.snapshotVenue())
+		moved = append(moved, tracker.snapshotVenue())
 	}
 	return moved
 }
 
 // exportStatus writes the stream status gauge. Callers hold the mutex.
-func (t *Tracker) exportStatus(s *stream) {
-	if t.opts.Metrics == nil {
+func (tracker *Tracker) exportStatus(stream *stream) {
+	if tracker.options.Metrics == nil {
 		return
 	}
-	v := obs.StreamStatusHealthy
-	switch s.status {
-	case pb.Status_STATUS_DEGRADED:
-		v = obs.StreamStatusDegraded
-	case pb.Status_STATUS_STALE:
-		v = obs.StreamStatusStale
+	v := observability.StreamStatusHealthy
+	switch stream.status {
+	case manoochv1.Status_STATUS_DEGRADED:
+		v = observability.StreamStatusDegraded
+	case manoochv1.Status_STATUS_STALE:
+		v = observability.StreamStatusStale
 	}
-	t.opts.Metrics.StreamStatus.WithLabelValues(
-		t.opts.Venue, core.MarketTypeName(s.spec.Instrument.MarketType),
-		s.spec.Instrument.Canonical(), core.ChannelName(s.spec.Channel)).Set(float64(v))
+	tracker.options.Metrics.StreamStatus.WithLabelValues(
+		tracker.options.Venue, core.MarketTypeName(stream.specification.Instrument.MarketType),
+		stream.specification.Instrument.Canonical(), core.ChannelName(stream.specification.Channel)).Set(float64(v))
 }
 
 // logTransition writes one line per status change. Callers hold the mutex.
@@ -713,20 +714,20 @@ func (t *Tracker) exportStatus(s *stream) {
 // Transitions are the one thing in the data path that is worth a log line:
 // there are a handful an hour, against six hundred messages a second, and they
 // are what an operator reconstructs an incident from.
-func (t *Tracker) logTransition(s *stream, prev pb.Status) {
-	if prev == pb.Status_STATUS_UNSPECIFIED && s.status == pb.Status_STATUS_DEGRADED {
+func (tracker *Tracker) logTransition(stream *stream, prev manoochv1.Status) {
+	if prev == manoochv1.Status_STATUS_UNSPECIFIED && stream.status == manoochv1.Status_STATUS_DEGRADED {
 		return // the startup state; the socket log line already says this
 	}
-	args := []any{
-		"stream", s.spec.String(),
+	arguments := []any{
+		"stream", stream.specification.String(),
 		"from", core.StatusName(prev),
-		"to", core.StatusName(s.status),
-		"reason", s.reason,
-		"source", core.SourceName(s.source),
+		"to", core.StatusName(stream.status),
+		"reason", stream.reason,
+		"source", core.SourceName(stream.source),
 	}
-	if s.status == pb.Status_STATUS_STALE {
-		t.opts.Log.Error("stream status", args...)
+	if stream.status == manoochv1.Status_STATUS_STALE {
+		tracker.options.Log.Error("stream status", arguments...)
 		return
 	}
-	t.opts.Log.Info("stream status", args...)
+	tracker.options.Log.Info("stream status", arguments...)
 }

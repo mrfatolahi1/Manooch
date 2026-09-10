@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	pb "github.com/you/manooch/gen/manoochv1"
+	"github.com/you/manooch/gen/manoochv1"
 	"github.com/you/manooch/internal/config"
 )
 
@@ -26,18 +26,18 @@ func assemble(t *testing.T, invalidCase string) string {
 	return dir
 }
 
-func copyTree(t *testing.T, src, dst string) {
+func copyTree(t *testing.T, source, destination string) {
 	t.Helper()
-	err := filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
+	err := filepath.WalkDir(source, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		rel, err := filepath.Rel(src, path)
+		relative, err := filepath.Rel(source, path)
 		if err != nil {
 			return err
 		}
-		target := filepath.Join(dst, rel)
-		if d.IsDir() {
+		target := filepath.Join(destination, relative)
+		if entry.IsDir() {
 			return os.MkdirAll(target, 0o755)
 		}
 		if filepath.Ext(path) != ".yaml" {
@@ -50,57 +50,57 @@ func copyTree(t *testing.T, src, dst string) {
 		return os.WriteFile(target, b, 0o644)
 	})
 	if err != nil {
-		t.Fatalf("copy %s: %v", src, err)
+		t.Fatalf("copy %s: %v", source, err)
 	}
 }
 
 func TestLoadValid(t *testing.T) {
-	cfg, err := config.Load(assemble(t, ""), "BINANCE")
+	configuration, err := config.Load(assemble(t, ""), "BINANCE")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
 
-	if cfg.Venue != "BINANCE" || !cfg.Enabled {
-		t.Errorf("venue = %q enabled = %v", cfg.Venue, cfg.Enabled)
+	if configuration.Venue != "BINANCE" || !configuration.Enabled {
+		t.Errorf("venue = %q enabled = %v", configuration.Venue, configuration.Enabled)
 	}
-	if got := cfg.Service.HTTP.Listen; got != "127.0.0.1:9101" {
+	if got := configuration.Service.HTTP.Listen; got != "127.0.0.1:9101" {
 		t.Errorf("listen = %q", got)
 	}
-	if got := cfg.Redis.DialTimeout.Std().String(); got != "2s" {
+	if got := configuration.Redis.DialTimeout.Standard().String(); got != "2s" {
 		t.Errorf("dial_timeout = %q", got)
 	}
 	// cadence 1s * ttl_multiplier 3.
-	if got := cfg.TTL(pb.Channel_CHANNEL_FUNDING); got.String() != "3s" {
+	if got := configuration.TimeToLive(manoochv1.Channel_CHANNEL_FUNDING); got.String() != "3s" {
 		t.Errorf("TTL(funding) = %v, want 3s", got)
 	}
-	if got := cfg.TTLs(); len(got) != 3 {
+	if got := configuration.TimeToLiveByChannel(); len(got) != 3 {
 		t.Errorf("TTLs() = %v, want one entry per configured channel", got)
 	}
 
 	// symbol_overrides is carried through untouched. What a venue calls an
 	// instrument is the adapter's answer, not this package's: the rule differs
 	// per venue and a fallback here would be right for at most one of them.
-	if got := cfg.SymbolOverrides["BTC_USDT"]; got != "BTCUSDT" {
+	if got := configuration.SymbolOverrides["BTC_USDT"]; got != "BTCUSDT" {
 		t.Errorf("symbol_overrides[BTC_USDT] = %q", got)
 	}
 
-	if len(cfg.Instruments) != 1 {
-		t.Fatalf("instruments = %d, want 1", len(cfg.Instruments))
+	if len(configuration.Instruments) != 1 {
+		t.Fatalf("instruments = %d, want 1", len(configuration.Instruments))
 	}
-	perp := cfg.Instruments[0]
-	if perp.MT != pb.MarketType_MARKET_TYPE_PERP_LINEAR {
-		t.Errorf("instruments[0].MT = %v", perp.MT)
+	perp := configuration.Instruments[0]
+	if perp.ResolvedMarketType != manoochv1.MarketType_MARKET_TYPE_PERP_LINEAR {
+		t.Errorf("instruments[0].ResolvedMarketType = %v", perp.ResolvedMarketType)
 	}
-	wantChans := []pb.Channel{
-		pb.Channel_CHANNEL_MARK_PRICE, pb.Channel_CHANNEL_INDEX_PRICE,
-		pb.Channel_CHANNEL_FUNDING,
+	wantChannels := []manoochv1.Channel{
+		manoochv1.Channel_CHANNEL_MARK_PRICE, manoochv1.Channel_CHANNEL_INDEX_PRICE,
+		manoochv1.Channel_CHANNEL_FUNDING,
 	}
-	if len(perp.Chans) != len(wantChans) {
-		t.Fatalf("instruments[0].Chans = %v", perp.Chans)
+	if len(perp.ResolvedChannels) != len(wantChannels) {
+		t.Fatalf("instruments[0].ResolvedChannels = %v", perp.ResolvedChannels)
 	}
-	for i, ch := range wantChans {
-		if perp.Chans[i] != ch {
-			t.Errorf("instruments[0].Chans[%d] = %v, want %v", i, perp.Chans[i], ch)
+	for i, channel := range wantChannels {
+		if perp.ResolvedChannels[i] != channel {
+			t.Errorf("instruments[0].ResolvedChannels[%d] = %v, want %v", i, perp.ResolvedChannels[i], channel)
 		}
 	}
 }
@@ -117,19 +117,19 @@ func TestLoadInvalid(t *testing.T) {
 		t.Fatal("no invalid cases found")
 	}
 
-	for _, e := range entries {
-		if !e.IsDir() {
+	for _, entry := range entries {
+		if !entry.IsDir() {
 			continue
 		}
-		t.Run(e.Name(), func(t *testing.T) {
-			dir := assemble(t, e.Name())
-			cfg, err := config.Load(dir, "BINANCE")
+		t.Run(entry.Name(), func(t *testing.T) {
+			dir := assemble(t, entry.Name())
+			configuration, err := config.Load(dir, "BINANCE")
 			if err == nil {
-				t.Fatalf("Load succeeded, want an error (got venue %q)", cfg.Venue)
+				t.Fatalf("Load succeeded, want an error (got venue %q)", configuration.Venue)
 			}
 
 			got := strings.ReplaceAll(err.Error(), dir, "<config>")
-			goldenPath := filepath.Join("testdata", "invalid", e.Name(), "error.golden")
+			goldenPath := filepath.Join("testdata", "invalid", entry.Name(), "error.golden")
 			if *update {
 				if err := os.WriteFile(goldenPath, []byte(got+"\n"), 0o644); err != nil {
 					t.Fatal(err)

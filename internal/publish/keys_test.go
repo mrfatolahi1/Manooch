@@ -4,33 +4,33 @@ import (
 	"strings"
 	"testing"
 
-	pb "github.com/you/manooch/gen/manoochv1"
+	"github.com/you/manooch/gen/manoochv1"
 	"github.com/you/manooch/internal/publish"
 )
 
 func TestKey(t *testing.T) {
 	cases := []struct {
-		venue  string
-		mt     pb.MarketType
-		symbol string
-		ch     pb.Channel
-		want   string
+		venue      string
+		marketType manoochv1.MarketType
+		symbol     string
+		channel    manoochv1.Channel
+		want       string
 	}{
-		{"BINANCE", pb.MarketType_MARKET_TYPE_SPOT, "BTC_USDT", pb.Channel_CHANNEL_METADATA,
+		{"BINANCE", manoochv1.MarketType_MARKET_TYPE_SPOT, "BTC_USDT", manoochv1.Channel_CHANNEL_METADATA,
 			"Manooch:BINANCE:SPOT:BTC_USDT:metadata"},
-		{"BINANCE", pb.MarketType_MARKET_TYPE_PERP_LINEAR, "BTC_USDT", pb.Channel_CHANNEL_MARK_PRICE,
+		{"BINANCE", manoochv1.MarketType_MARKET_TYPE_PERP_LINEAR, "BTC_USDT", manoochv1.Channel_CHANNEL_MARK_PRICE,
 			"Manooch:BINANCE:PERP_LINEAR:BTC_USDT:mark_price"},
-		{"BINANCE", pb.MarketType_MARKET_TYPE_PERP_LINEAR, "BTC_USDT", pb.Channel_CHANNEL_HEALTH,
+		{"BINANCE", manoochv1.MarketType_MARKET_TYPE_PERP_LINEAR, "BTC_USDT", manoochv1.Channel_CHANNEL_HEALTH,
 			"Manooch:BINANCE:PERP_LINEAR:BTC_USDT:health"},
-		{"BINANCE", pb.MarketType_MARKET_TYPE_PERP_INVERSE, "BTC_USD", pb.Channel_CHANNEL_FUNDING,
+		{"BINANCE", manoochv1.MarketType_MARKET_TYPE_PERP_INVERSE, "BTC_USD", manoochv1.Channel_CHANNEL_FUNDING,
 			"Manooch:BINANCE:PERP_INVERSE:BTC_USD:funding"},
 		// Casing is enforced by the builder, not asked of the caller.
-		{"binance", pb.MarketType_MARKET_TYPE_PERP_LINEAR, "btc_usdt", pb.Channel_CHANNEL_INDEX_PRICE,
+		{"binance", manoochv1.MarketType_MARKET_TYPE_PERP_LINEAR, "btc_usdt", manoochv1.Channel_CHANNEL_INDEX_PRICE,
 			"Manooch:BINANCE:PERP_LINEAR:BTC_USDT:index_price"},
 	}
-	for _, tc := range cases {
-		if got := publish.Key(tc.venue, tc.mt, tc.symbol, tc.ch); got != tc.want {
-			t.Errorf("Key(%q, %v, %q, %v) = %q, want %q", tc.venue, tc.mt, tc.symbol, tc.ch, got, tc.want)
+	for _, testCase := range cases {
+		if got := publish.Key(testCase.venue, testCase.marketType, testCase.symbol, testCase.channel); got != testCase.want {
+			t.Errorf("Key(%q, %v, %q, %v) = %q, want %q", testCase.venue, testCase.marketType, testCase.symbol, testCase.channel, got, testCase.want)
 		}
 	}
 }
@@ -100,11 +100,11 @@ func TestParseKeyRejects(t *testing.T) {
 		{"venue subject upper case", "Manooch:BINANCE:venue:HEALTH"},
 		{"trailing separator", "Manooch:BINANCE:SPOT:BTC_USDT:"},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if _, err := publish.ParseKey(tc.key); err == nil {
-				t.Fatalf("ParseKey(%q) succeeded, want an error", tc.key)
-			} else if tc.key != "" && !strings.Contains(err.Error(), tc.key) {
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if _, err := publish.ParseKey(testCase.key); err == nil {
+				t.Fatalf("ParseKey(%q) succeeded, want an error", testCase.key)
+			} else if testCase.key != "" && !strings.Contains(err.Error(), testCase.key) {
 				t.Errorf("error does not quote the key: %v", err)
 			}
 		})

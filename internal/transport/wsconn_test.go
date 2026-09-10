@@ -15,50 +15,50 @@ import (
 	"github.com/you/manooch/internal/transport"
 )
 
-// serve runs a websocket server that hands each connection to fn, and returns
-// its ws:// address.
-func serve(t *testing.T, fn func(ctx context.Context, c *websocket.Conn)) string {
+// serve runs a websocket server that hands each connection to callback, and
+// returns its ws:// address.
+func serve(t *testing.T, callback func(ctx context.Context, connection *websocket.Conn)) string {
 	t.Helper()
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		c, err := websocket.Accept(w, r, nil)
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		connection, err := websocket.Accept(response, request, nil)
 		if err != nil {
 			return
 		}
-		defer c.CloseNow()
-		fn(r.Context(), c)
+		defer connection.CloseNow()
+		callback(request.Context(), connection)
 	}))
-	t.Cleanup(srv.Close)
-	return "ws://" + strings.TrimPrefix(srv.URL, "http://")
+	t.Cleanup(server.Close)
+	return "ws://" + strings.TrimPrefix(server.URL, "http://")
 }
 
-func dial(t *testing.T, url string, opts transport.Options) core.Conn {
+func dial(t *testing.T, url string, options transport.Options) core.Conn {
 	t.Helper()
-	opts.URL = url
+	options.URL = url
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	c, err := transport.Dial(ctx, opts)
+	connection, err := transport.Dial(ctx, options)
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
-	t.Cleanup(func() { c.Close() })
-	return c
+	t.Cleanup(func() { connection.Close() })
+	return connection
 }
 
 // TestReadStampsArrival: recv_time_ns is the basis of every freshness and
 // clock-skew number downstream, so it must bracket the read and nothing else.
 func TestReadStampsArrival(t *testing.T) {
-	url := serve(t, func(ctx context.Context, c *websocket.Conn) {
+	url := serve(t, func(ctx context.Context, connection *websocket.Conn) {
 		time.Sleep(20 * time.Millisecond)
-		_ = c.Write(ctx, websocket.MessageText, []byte(`{"hello":"world"}`))
+		_ = connection.Write(ctx, websocket.MessageText, []byte(`{"hello":"world"}`))
 		<-ctx.Done()
 	})
-	c := dial(t, url, transport.Options{ReadTimeout: 2 * time.Second})
+	connection := dial(t, url, transport.Options{ReadTimeout: 2 * time.Second})
 
 	before := time.Now().UnixNano()
-	frame, recvNs, err := c.Read(context.Background())
+	frame, receivedNs, err := connection.Read(context.Background())
 	after := time.Now().UnixNano()
 	if err != nil {
 		t.Fatalf("Read: %v", err)
@@ -67,8 +67,8 @@ func TestReadStampsArrival(t *testing.T) {
 	if got := string(frame); got != `{"hello":"world"}` {
 		t.Errorf("frame = %q", got)
 	}
-	if recvNs < before || recvNs > after {
-		t.Errorf("recv_time_ns %d outside the read window [%d, %d]", recvNs, before, after)
+	if receivedNs < before || receivedNs > after {
+		t.Errorf("recv_time_ns %d outside the read window [%d, %d]", receivedNs, before, after)
 	}
 }
 
@@ -76,11 +76,11 @@ func TestReadStampsArrival(t *testing.T) {
 // the deadline, Read blocks forever on a half-open connection and the stream
 // looks alive to everything above it.
 func TestIdleSocketErrors(t *testing.T) {
-	url := serve(t, func(ctx context.Context, c *websocket.Conn) { <-ctx.Done() })
-	c := dial(t, url, transport.Options{ReadTimeout: 100 * time.Millisecond})
+	url := serve(t, func(ctx context.Context, connection *websocket.Conn) { <-ctx.Done() })
+	connection := dial(t, url, transport.Options{ReadTimeout: 100 * time.Millisecond})
 
 	start := time.Now()
-	_, _, err := c.Read(context.Background())
+	_, _, err := connection.Read(context.Background())
 	if !errors.Is(err, transport.ErrIdle) {
 		t.Fatalf("Read of a silent socket = %v, want ErrIdle", err)
 	}
@@ -92,8 +92,8 @@ func TestIdleSocketErrors(t *testing.T) {
 // TestCallerCancellationIsNotIdle: a caller cancelling its own context is a
 // shutdown, not a dead venue, and must not be reported as one.
 func TestCallerCancellationIsNotIdle(t *testing.T) {
-	url := serve(t, func(ctx context.Context, c *websocket.Conn) { <-ctx.Done() })
-	c := dial(t, url, transport.Options{ReadTimeout: time.Minute})
+	url := serve(t, func(ctx context.Context, connection *websocket.Conn) { <-ctx.Done() })
+	connection := dial(t, url, transport.Options{ReadTimeout: time.Minute})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -101,7 +101,7 @@ func TestCallerCancellationIsNotIdle(t *testing.T) {
 		cancel()
 	}()
 
-	_, _, err := c.Read(ctx)
+	_, _, err := connection.Read(ctx)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Read after cancel = %v, want context.Canceled", err)
 	}
@@ -113,21 +113,21 @@ func TestCallerCancellationIsNotIdle(t *testing.T) {
 // TestCloseUnblocksRead is what makes stream cancellation work: cancelling a
 // context does not unblock a read already in flight, and only Close does.
 func TestCloseUnblocksRead(t *testing.T) {
-	url := serve(t, func(ctx context.Context, c *websocket.Conn) { <-ctx.Done() })
-	c := dial(t, url, transport.Options{ReadTimeout: time.Minute})
+	url := serve(t, func(ctx context.Context, connection *websocket.Conn) { <-ctx.Done() })
+	connection := dial(t, url, transport.Options{ReadTimeout: time.Minute})
 
-	var wg sync.WaitGroup
+	var waitGroup sync.WaitGroup
 	errc := make(chan error, 1)
-	wg.Add(1)
+	waitGroup.Add(1)
 	go func() {
-		defer wg.Done()
-		_, _, err := c.Read(context.Background())
+		defer waitGroup.Done()
+		_, _, err := connection.Read(context.Background())
 		errc <- err
 	}()
 
 	// Long enough that Read is parked in the socket, not still starting up.
 	time.Sleep(50 * time.Millisecond)
-	if err := c.Close(); err != nil {
+	if err := connection.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 
@@ -139,10 +139,10 @@ func TestCloseUnblocksRead(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("Close did not unblock Read")
 	}
-	wg.Wait()
+	waitGroup.Wait()
 
 	// Close runs once however many callers reach it.
-	if err := c.Close(); err != nil {
+	if err := connection.Close(); err != nil {
 		t.Errorf("second Close: %v", err)
 	}
 }
@@ -151,13 +151,13 @@ func TestCloseUnblocksRead(t *testing.T) {
 // than arrive truncated, because half a message parses into a plausible wrong
 // one that nothing downstream can tell from a real one.
 func TestOversizedFrameErrors(t *testing.T) {
-	url := serve(t, func(ctx context.Context, c *websocket.Conn) {
-		_ = c.Write(ctx, websocket.MessageText, []byte(strings.Repeat("x", 4096)))
+	url := serve(t, func(ctx context.Context, connection *websocket.Conn) {
+		_ = connection.Write(ctx, websocket.MessageText, []byte(strings.Repeat("x", 4096)))
 		<-ctx.Done()
 	})
-	c := dial(t, url, transport.Options{ReadTimeout: 2 * time.Second, MaxFrameBytes: 1024})
+	connection := dial(t, url, transport.Options{ReadTimeout: 2 * time.Second, MaxFrameBytes: 1024})
 
-	frame, _, err := c.Read(context.Background())
+	frame, _, err := connection.Read(context.Background())
 	if !errors.Is(err, transport.ErrFrameTooBig) {
 		t.Fatalf("Read of an oversized frame = %v, want ErrFrameTooBig", err)
 	}
@@ -170,12 +170,12 @@ func TestOversizedFrameErrors(t *testing.T) {
 // the library replies to a server ping on its own, so no adapter has to.
 func TestServerPingsAreAnswered(t *testing.T) {
 	pongs := make(chan struct{}, 1)
-	url := serve(t, func(ctx context.Context, c *websocket.Conn) {
+	url := serve(t, func(ctx context.Context, connection *websocket.Conn) {
 		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 		// A pong is only processed while something is reading, on both ends.
-		ctx = c.CloseRead(ctx)
-		if err := c.Ping(ctx); err == nil { // blocks until the pong arrives
+		ctx = connection.CloseRead(ctx)
+		if err := connection.Ping(ctx); err == nil { // blocks until the pong arrives
 			select {
 			case pongs <- struct{}{}:
 			default:
@@ -183,12 +183,12 @@ func TestServerPingsAreAnswered(t *testing.T) {
 		}
 		<-ctx.Done()
 	})
-	c := dial(t, url, transport.Options{ReadTimeout: 5 * time.Second})
+	connection := dial(t, url, transport.Options{ReadTimeout: 5 * time.Second})
 
 	// Control frames are only handled while a read is in flight.
 	readCtx, cancelRead := context.WithCancel(context.Background())
 	defer cancelRead()
-	go func() { _, _, _ = c.Read(readCtx) }()
+	go func() { _, _, _ = connection.Read(readCtx) }()
 
 	select {
 	case <-pongs:
@@ -196,11 +196,11 @@ func TestServerPingsAreAnswered(t *testing.T) {
 		t.Fatal("server ping went unanswered")
 	}
 
-	tc, ok := c.(*transport.Conn)
+	testCase, ok := connection.(*transport.Conn)
 	if !ok {
-		t.Fatalf("Dial returned %T", c)
+		t.Fatalf("Dial returned %T", connection)
 	}
-	if got := tc.ServerPings(); got < 1 {
+	if got := testCase.ServerPings(); got < 1 {
 		t.Errorf("ServerPings() = %d, want at least 1", got)
 	}
 }
@@ -214,13 +214,13 @@ func TestDialRejectsEmptyURL(t *testing.T) {
 // TestDialErrorNamesTheStatus: a venue that refuses the handshake answers with
 // a status, and an error without it is an unexplained "bad handshake".
 func TestDialErrorNamesTheStatus(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "nope", http.StatusTooManyRequests)
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		http.Error(response, "nope", http.StatusTooManyRequests)
 	}))
-	defer srv.Close()
+	defer server.Close()
 
 	_, err := transport.Dial(context.Background(), transport.Options{
-		URL: "ws://" + strings.TrimPrefix(srv.URL, "http://"),
+		URL: "ws://" + strings.TrimPrefix(server.URL, "http://"),
 	})
 	if err == nil {
 		t.Fatal("Dial against a rejecting server succeeded")

@@ -8,17 +8,17 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
-	pb "github.com/you/manooch/gen/manoochv1"
+	"github.com/you/manooch/gen/manoochv1"
 	"github.com/you/manooch/internal/core"
-	"github.com/you/manooch/internal/obs"
+	"github.com/you/manooch/internal/observability"
 	"google.golang.org/protobuf/proto"
 )
 
-// A Publisher writes one message to one topic. ttl == 0 means the key never
-// expires, for channels with no cadence of their own, where an expiring key
-// would report a working stream as dead.
+// A Publisher writes one message to one topic. timeToLive == 0 means the key
+// never expires, for channels with no cadence of their own, where an expiring
+// key would report a working stream as dead.
 type Publisher interface {
-	Publish(ctx context.Context, key string, msg proto.Message, ttl time.Duration) error
+	Publish(ctx context.Context, key string, message proto.Message, timeToLive time.Duration) error
 	Close() error
 }
 
@@ -26,17 +26,17 @@ type Publisher interface {
 // Envelope in field 1.
 type enveloped interface {
 	proto.Message
-	GetEnv() *pb.Envelope
+	GetEnv() *manoochv1.Envelope
 }
 
-// errLogInterval caps the write-error log rate: Redis being down is one fact,
+// errorLogInterval caps the write-error log rate: Redis being down is one fact,
 // not one fact per message.
-const errLogInterval = time.Second
+const errorLogInterval = time.Second
 
 // Options configures a RedisPublisher.
 type Options struct {
 	Addr        string
-	DB          int
+	Database    int
 	DialTimeout time.Duration
 	ReadTimeout time.Duration
 	PoolSize    int
@@ -45,7 +45,7 @@ type Options struct {
 	InstanceID    string
 	SchemaVersion uint32
 
-	Metrics *obs.Metrics
+	Metrics *observability.Metrics
 	Logger  *slog.Logger
 
 	// Now is swappable for tests. Defaults to time.Now.
@@ -54,13 +54,13 @@ type Options struct {
 
 // RedisPublisher writes to Redis as a last-value cache plus a Pub/Sub fan-out.
 type RedisPublisher struct {
-	rdb  *redis.Client
-	opts Options
-	now  func() time.Time
+	redisClient *redis.Client
+	options     Options
+	now         func() time.Time
 
-	mu         sync.Mutex
-	seq        map[string]uint64
-	lastErrLog time.Time
+	mutex        sync.Mutex
+	sequence     map[string]uint64
+	lastErrorLog time.Time
 }
 
 var _ Publisher = (*RedisPublisher)(nil)
@@ -68,35 +68,35 @@ var _ Publisher = (*RedisPublisher)(nil)
 // NewRedis dials Redis and fails if it is not there. A feed that cannot publish
 // has nothing to do, and starting anyway leaves consumers on a stale cache with
 // no indication why.
-func NewRedis(ctx context.Context, opts Options) (*RedisPublisher, error) {
-	if opts.Logger == nil {
+func NewRedis(ctx context.Context, options Options) (*RedisPublisher, error) {
+	if options.Logger == nil {
 		return nil, fmt.Errorf("publish: no logger")
 	}
-	if opts.InstanceID == "" {
+	if options.InstanceID == "" {
 		return nil, fmt.Errorf("publish: no instance id")
 	}
-	if opts.Now == nil {
-		opts.Now = time.Now
+	if options.Now == nil {
+		options.Now = time.Now
 	}
 
-	rdb := redis.NewClient(&redis.Options{
-		Addr:         opts.Addr,
-		DB:           opts.DB,
-		DialTimeout:  opts.DialTimeout,
-		ReadTimeout:  opts.ReadTimeout,
-		WriteTimeout: opts.ReadTimeout,
-		PoolSize:     opts.PoolSize,
+	redisClient := redis.NewClient(&redis.Options{
+		Addr:         options.Addr,
+		DB:           options.Database,
+		DialTimeout:  options.DialTimeout,
+		ReadTimeout:  options.ReadTimeout,
+		WriteTimeout: options.ReadTimeout,
+		PoolSize:     options.PoolSize,
 	})
-	if err := rdb.Ping(ctx).Err(); err != nil {
-		_ = rdb.Close()
-		return nil, fmt.Errorf("publish: redis %s db %d: %w", opts.Addr, opts.DB, err)
+	if err := redisClient.Ping(ctx).Err(); err != nil {
+		_ = redisClient.Close()
+		return nil, fmt.Errorf("publish: redis %s db %d: %w", options.Addr, options.Database, err)
 	}
 
 	return &RedisPublisher{
-		rdb:  rdb,
-		opts: opts,
-		now:  opts.Now,
-		seq:  make(map[string]uint64),
+		redisClient: redisClient,
+		options:     options,
+		now:         options.Now,
+		sequence:    make(map[string]uint64),
 	}, nil
 }
 
@@ -109,50 +109,50 @@ func NewRedis(ctx context.Context, opts Options) (*RedisPublisher, error) {
 // The SET lets a cold consumer read current state instead of waiting for the
 // next tick, and makes freshness a property of the data: key present means
 // fresh, key absent means stale, with no second timestamp to drift out of sync.
-func (p *RedisPublisher) Publish(ctx context.Context, key string, msg proto.Message, ttl time.Duration) error {
-	m, ok := msg.(enveloped)
+func (publisher *RedisPublisher) Publish(ctx context.Context, key string, message proto.Message, timeToLive time.Duration) error {
+	carrier, ok := message.(enveloped)
 	if !ok {
-		return fmt.Errorf("publish %s: %T carries no envelope", key, msg)
+		return fmt.Errorf("publish %s: %T carries no envelope", key, message)
 	}
-	env := m.GetEnv()
-	if env == nil {
-		return fmt.Errorf("publish %s: %T has a nil envelope", key, msg)
+	envelope := carrier.GetEnv()
+	if envelope == nil {
+		return fmt.Errorf("publish %s: %T has a nil envelope", key, message)
 	}
 	// Never publish without a status: a consumer that cannot tell healthy from
 	// stale is worse off than one with no data.
-	if env.Status == pb.Status_STATUS_UNSPECIFIED {
+	if envelope.Status == manoochv1.Status_STATUS_UNSPECIFIED {
 		return fmt.Errorf("publish %s: envelope status is unspecified", key)
 	}
 
-	p.mu.Lock()
-	p.seq[key]++
-	env.PublishSeq = p.seq[key]
-	env.InstanceId = p.opts.InstanceID
-	env.SchemaVersion = p.opts.SchemaVersion
-	if env.Venue == "" {
-		env.Venue = p.opts.Venue
+	publisher.mutex.Lock()
+	publisher.sequence[key]++
+	envelope.PublishSeq = publisher.sequence[key]
+	envelope.InstanceId = publisher.options.InstanceID
+	envelope.SchemaVersion = publisher.options.SchemaVersion
+	if envelope.Venue == "" {
+		envelope.Venue = publisher.options.Venue
 	}
 	// Set here and nowhere else: any earlier measures when we decided to
 	// publish rather than when we did, which is the gap being looked for.
-	publishTime := p.now()
-	env.PublishTimeNs = publishTime.UnixNano()
+	publishTime := publisher.now()
+	envelope.PublishTimeNs = publishTime.UnixNano()
 
-	// Under the lock: env is a pointer into the caller's message, so a second
+	// Under the lock: envelope is a pointer into the caller's message, so a second
 	// publish of the same message would race with the stamping above.
-	b, marshalErr := proto.Marshal(msg)
-	p.mu.Unlock()
+	b, marshalErr := proto.Marshal(message)
+	publisher.mutex.Unlock()
 
 	if marshalErr != nil {
 		return fmt.Errorf("publish %s: marshal: %w", key, marshalErr)
 	}
 
-	pipe := p.rdb.Pipeline()
-	if ttl > 0 {
-		ms := ttl.Milliseconds()
-		if ms == 0 {
-			ms = 1 // a sub-millisecond TTL would round to PX 0, which Redis rejects
+	pipe := publisher.redisClient.Pipeline()
+	if timeToLive > 0 {
+		milliseconds := timeToLive.Milliseconds()
+		if milliseconds == 0 {
+			milliseconds = 1 // a sub-millisecond TTL would round to PX 0, which Redis rejects
 		}
-		pipe.Do(ctx, "SET", key, b, "PX", ms)
+		pipe.Do(ctx, "SET", key, b, "PX", milliseconds)
 	} else {
 		// No expiry: liveness for this channel comes from elsewhere.
 		pipe.Do(ctx, "SET", key, b)
@@ -160,31 +160,31 @@ func (p *RedisPublisher) Publish(ctx context.Context, key string, msg proto.Mess
 	pipe.Do(ctx, "PUBLISH", key, b)
 
 	if _, err := pipe.Exec(ctx); err != nil {
-		p.onWriteError(key, err)
+		publisher.onWriteError(key, err)
 		return fmt.Errorf("publish %s: %w", key, err)
 	}
 
-	p.observe(env, publishTime)
+	publisher.observe(envelope, publishTime)
 	return nil
 }
 
 // observe records metrics for a successful publish. Labels come from the
 // envelope rather than from re-parsing the key on the hot path.
-func (p *RedisPublisher) observe(env *pb.Envelope, publishTime time.Time) {
-	if p.opts.Metrics == nil {
+func (publisher *RedisPublisher) observe(envelope *manoochv1.Envelope, publishTime time.Time) {
+	if publisher.options.Metrics == nil {
 		return
 	}
-	venue := env.Venue
-	channel := core.ChannelName(env.Channel)
+	venue := envelope.Venue
+	channel := core.ChannelName(envelope.Channel)
 
 	marketType, symbol := VenueScope, ""
-	if env.Instrument != nil {
-		marketType = core.MarketTypeName(env.Instrument.MarketType)
-		symbol = env.Instrument.Canonical
+	if envelope.Instrument != nil {
+		marketType = core.MarketTypeName(envelope.Instrument.MarketType)
+		symbol = envelope.Instrument.Canonical
 	}
 
-	p.opts.Metrics.MessagesPublished.
-		WithLabelValues(venue, marketType, symbol, channel, core.SourceName(env.Source)).Inc()
+	publisher.options.Metrics.MessagesPublished.
+		WithLabelValues(venue, marketType, symbol, channel, core.SourceName(envelope.Source)).Inc()
 
 	// A negative latency means our clock is behind the venue's: a skew signal,
 	// not a measurement, and averaging it in would hide both.
@@ -193,35 +193,35 @@ func (p *RedisPublisher) observe(env *pb.Envelope, publishTime time.Time) {
 	// latency at all: a funding rate carries the instant it settled, so the
 	// difference is how old the value is, and folding that into the histogram
 	// would put one venue's funding channel permanently in the last bucket.
-	if env.ExchangeTimeIsSendTime && env.ExchangeTimeNs > 0 {
-		if d := publishTime.UnixNano() - env.ExchangeTimeNs; d >= 0 {
-			p.opts.Metrics.PublishLatency.WithLabelValues(venue, channel).Observe(float64(d) / float64(time.Second))
+	if envelope.ExchangeTimeIsSendTime && envelope.ExchangeTimeNs > 0 {
+		if d := publishTime.UnixNano() - envelope.ExchangeTimeNs; d >= 0 {
+			publisher.options.Metrics.PublishLatency.WithLabelValues(venue, channel).Observe(float64(d) / float64(time.Second))
 		}
 	}
-	if env.RecvTimeNs > 0 {
-		if d := publishTime.UnixNano() - env.RecvTimeNs; d >= 0 {
-			p.opts.Metrics.InternalLatency.WithLabelValues(venue, channel).Observe(float64(d) / float64(time.Second))
+	if envelope.RecvTimeNs > 0 {
+		if d := publishTime.UnixNano() - envelope.RecvTimeNs; d >= 0 {
+			publisher.options.Metrics.InternalLatency.WithLabelValues(venue, channel).Observe(float64(d) / float64(time.Second))
 		}
 	}
 }
 
 // onWriteError counts and, at most once a second, logs a failed write. It never
 // blocks and never panics: a Redis outage must degrade the feed, not stop it.
-func (p *RedisPublisher) onWriteError(key string, err error) {
-	if p.opts.Metrics != nil {
-		p.opts.Metrics.RedisPublishErrors.WithLabelValues(p.opts.Venue).Inc()
+func (publisher *RedisPublisher) onWriteError(key string, err error) {
+	if publisher.options.Metrics != nil {
+		publisher.options.Metrics.RedisPublishErrors.WithLabelValues(publisher.options.Venue).Inc()
 	}
 
-	now := p.now()
-	p.mu.Lock()
-	log := now.Sub(p.lastErrLog) >= errLogInterval
+	now := publisher.now()
+	publisher.mutex.Lock()
+	log := now.Sub(publisher.lastErrorLog) >= errorLogInterval
 	if log {
-		p.lastErrLog = now
+		publisher.lastErrorLog = now
 	}
-	p.mu.Unlock()
+	publisher.mutex.Unlock()
 
 	if log {
-		p.opts.Logger.Error("redis publish failed", "key", key, "error", err.Error())
+		publisher.options.Logger.Error("redis publish failed", "key", key, "error", err.Error())
 	}
 }
 
@@ -232,7 +232,7 @@ func (p *RedisPublisher) onWriteError(key string, err error) {
 // It is deliberately not a way to write. Everything published goes through
 // Publish, which is the only place the envelope is stamped and the only place
 // publish_time_ns is set.
-func (p *RedisPublisher) Redis() *redis.Client { return p.rdb }
+func (publisher *RedisPublisher) Redis() *redis.Client { return publisher.redisClient }
 
 // Close releases the connection pool.
-func (p *RedisPublisher) Close() error { return p.rdb.Close() }
+func (publisher *RedisPublisher) Close() error { return publisher.redisClient.Close() }
