@@ -32,17 +32,17 @@ const firstFrameDeadline = 15 * time.Second
 func liveAdapter(t *testing.T) *kucoin.Adapter {
 	t.Helper()
 	return newAdapterWith(t, kucoin.Options{
-		WSEndpoint:   "https://api-futures.kucoin.com",
-		RESTEndpoint: "https://api-futures.kucoin.com",
-		ReadTimeout:  60 * time.Second,
-		ConnectID:    nil, // a real UUID per connection, as production does
+		WebSocketEndpoint: "https://api-futures.kucoin.com",
+		RESTEndpoint:      "https://api-futures.kucoin.com",
+		ReadTimeout:       60 * time.Second,
+		ConnectID:         nil, // a real UUID per connection, as production does
 	})
 }
 
-func livePlan(t *testing.T, a *kucoin.Adapter) core.SocketPlan {
+func livePlan(t *testing.T, adapter *kucoin.Adapter) core.SocketPlan {
 	t.Helper()
-	plans, err := a.PlanSubscriptions([]core.StreamSpec{
-		spec(t, "BTC_USDT", manoochv1.Channel_CHANNEL_MARK_PRICE),
+	plans, err := adapter.PlanSubscriptions([]core.StreamSpec{
+		specification(t, "BTC_USDT", manoochv1.Channel_CHANNEL_MARK_PRICE),
 	})
 	if err != nil {
 		t.Fatalf("PlanSubscriptions: %v", err)
@@ -60,49 +60,49 @@ func livePlan(t *testing.T, a *kucoin.Adapter) core.SocketPlan {
 // A Dial that returns at all is the bullet call succeeding: without a token and
 // an endpoint there is no socket to return.
 func TestLiveInstrumentStream(t *testing.T) {
-	a := liveAdapter(t)
+	adapter := liveAdapter(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), firstFrameDeadline)
 	defer cancel()
 
-	conn, err := a.Dial(ctx, livePlan(t, a))
+	connection, err := adapter.Dial(ctx, livePlan(t, adapter))
 	if err != nil {
 		t.Fatalf("Dial (bullet, socket and subscription): %v", err)
 	}
-	defer conn.Close()
+	defer connection.Close()
 
 	for {
-		frame, recvNs, err := conn.Read(ctx)
+		frame, receivedNs, err := connection.Read(ctx)
 		if err != nil {
 			t.Fatalf("Read: %v", err)
 		}
-		msgs, err := a.Parse(frame, recvNs)
+		messages, err := adapter.Parse(frame, receivedNs)
 		if err != nil {
 			t.Fatalf("Parse %s: %v", frame, err)
 		}
-		if len(msgs) == 0 {
+		if len(messages) == 0 {
 			continue // the welcome, an ack, or a pong
 		}
 
-		for _, m := range msgs {
-			env := m.Proto.(interface{ GetEnv() *manoochv1.Envelope }).GetEnv()
+		for _, message := range messages {
+			envelope := message.Proto.(interface{ GetEnv() *manoochv1.Envelope }).GetEnv()
 
-			skew := time.Duration(env.ExchangeTimeNs-env.RecvTimeNs) * time.Nanosecond
+			skew := time.Duration(envelope.ExchangeTimeNs-envelope.RecvTimeNs) * time.Nanosecond
 			if skew < -maxClockSkew || skew > maxClockSkew {
-				t.Errorf("%s: clock skew %v exceeds %v", m.Key, skew, maxClockSkew)
+				t.Errorf("%s: clock skew %v exceeds %v", message.Key, skew, maxClockSkew)
 			}
-			if env.Status != manoochv1.Status_STATUS_HEALTHY {
-				t.Errorf("%s: status = %v", m.Key, env.Status)
+			if envelope.Status != manoochv1.Status_STATUS_HEALTHY {
+				t.Errorf("%s: status = %v", message.Key, envelope.Status)
 			}
-			if env.VenueSeqPresent {
-				t.Errorf("%s: claims a venue sequence; this topic carries none", m.Key)
+			if envelope.VenueSeqPresent {
+				t.Errorf("%s: claims a venue sequence; this topic carries none", message.Key)
 			}
-			if m.TTL <= 0 {
-				t.Errorf("%s: ttl = %v", m.Key, m.TTL)
+			if message.TimeToLive <= 0 {
+				t.Errorf("%s: ttl = %v", message.Key, message.TimeToLive)
 			}
 		}
 
-		mark, ok := msgs[0].Proto.(*manoochv1.MarkPrice)
+		mark, ok := messages[0].Proto.(*manoochv1.MarkPrice)
 		if !ok {
 			// funding.rate arrives once a minute and may land first.
 			continue
@@ -112,7 +112,7 @@ func TestLiveInstrumentStream(t *testing.T) {
 		}
 		t.Logf("BTC_USDT mark %s, index %s, skew %v",
 			price.Price(mark.MarkPrice),
-			price.Price(msgs[1].Proto.(*manoochv1.IndexPrice).IndexPrice),
+			price.Price(messages[1].Proto.(*manoochv1.IndexPrice).IndexPrice),
 			time.Duration(mark.Env.ExchangeTimeNs-mark.Env.RecvTimeNs))
 		return
 	}
@@ -128,7 +128,7 @@ func TestLiveClientPingKeepsTheConnection(t *testing.T) {
 	if testing.Short() {
 		t.Skip("waits out a full ping interval plus its timeout")
 	}
-	a := liveAdapter(t)
+	adapter := liveAdapter(t)
 
 	// pingInterval + pingTimeout is 28s on this venue; 40 leaves room for the
 	// venue to act on a ping we failed to send.
@@ -137,26 +137,26 @@ func TestLiveClientPingKeepsTheConnection(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), past+firstFrameDeadline)
 	defer cancel()
 
-	conn, err := a.Dial(ctx, livePlan(t, a))
+	connection, err := adapter.Dial(ctx, livePlan(t, adapter))
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
-	defer conn.Close()
+	defer connection.Close()
 
 	deadline := time.Now().Add(past)
 	var frames, messages int
 	for time.Now().Before(deadline) {
-		frame, recvNs, err := conn.Read(ctx)
+		frame, receivedNs, err := connection.Read(ctx)
 		if err != nil {
 			t.Fatalf("connection dropped after %v and %d frames: %v",
 				past-time.Until(deadline), frames, err)
 		}
 		frames++
-		msgs, err := a.Parse(frame, recvNs)
+		parsed, err := adapter.Parse(frame, receivedNs)
 		if err != nil {
 			t.Fatalf("Parse %s: %v", frame, err)
 		}
-		messages += len(msgs)
+		messages += len(parsed)
 	}
 
 	// Still connected is the point; still delivering is the proof that it is a
@@ -171,32 +171,32 @@ func TestLiveClientPingKeepsTheConnection(t *testing.T) {
 // endpoints, including the funding call whose response names the index symbol
 // rather than the contract's.
 func TestLiveFetchOnce(t *testing.T) {
-	a := liveAdapter(t)
+	adapter := liveAdapter(t)
 	ctx, cancel := context.WithTimeout(context.Background(), firstFrameDeadline)
 	defer cancel()
 
-	for _, ch := range []manoochv1.Channel{
+	for _, channel := range []manoochv1.Channel{
 		manoochv1.Channel_CHANNEL_MARK_PRICE,
 		manoochv1.Channel_CHANNEL_INDEX_PRICE,
 		manoochv1.Channel_CHANNEL_FUNDING,
 	} {
-		t.Run(core.ChannelName(ch), func(t *testing.T) {
-			msgs, err := a.FetchOnce(ctx, spec(t, "BTC_USDT", ch))
+		t.Run(core.ChannelName(channel), func(t *testing.T) {
+			messages, err := adapter.FetchOnce(ctx, specification(t, "BTC_USDT", channel))
 			if err != nil {
 				t.Fatalf("FetchOnce: %v", err)
 			}
-			if len(msgs) != 1 {
-				t.Fatalf("messages = %d, want 1", len(msgs))
+			if len(messages) != 1 {
+				t.Fatalf("messages = %d, want 1", len(messages))
 			}
-			env := msgs[0].Proto.(interface{ GetEnv() *manoochv1.Envelope }).GetEnv()
-			if env.Source != manoochv1.Source_SOURCE_REST {
-				t.Errorf("source = %v, want REST", env.Source)
+			envelope := messages[0].Proto.(interface{ GetEnv() *manoochv1.Envelope }).GetEnv()
+			if envelope.Source != manoochv1.Source_SOURCE_REST {
+				t.Errorf("source = %v, want REST", envelope.Source)
 			}
-			if env.Instrument.VenueSymbol != "XBTUSDTM" {
-				t.Errorf("venue_symbol = %q, want XBTUSDTM", env.Instrument.VenueSymbol)
+			if envelope.Instrument.VenueSymbol != "XBTUSDTM" {
+				t.Errorf("venue_symbol = %q, want XBTUSDTM", envelope.Instrument.VenueSymbol)
 			}
-			skew := time.Duration(env.ExchangeTimeNs-env.RecvTimeNs) * time.Nanosecond
-			t.Logf("%s skew %v", core.ChannelName(ch), skew)
+			skew := time.Duration(envelope.ExchangeTimeNs-envelope.RecvTimeNs) * time.Nanosecond
+			t.Logf("%s skew %v", core.ChannelName(channel), skew)
 		})
 	}
 }
@@ -205,28 +205,28 @@ func TestLiveFetchOnce(t *testing.T) {
 // that the contract multiplier — the number every downstream order size depends
 // on — is really there.
 func TestLiveFetchMetadata(t *testing.T) {
-	a := liveAdapter(t)
+	adapter := liveAdapter(t)
 	ctx, cancel := context.WithTimeout(context.Background(), firstFrameDeadline)
 	defer cancel()
 
-	metas, err := a.FetchMetadata(ctx, kucoin.MarketType)
+	metadataList, err := adapter.FetchMetadata(ctx, kucoin.MarketType)
 	if err != nil {
 		t.Fatalf("FetchMetadata: %v", err)
 	}
-	if len(metas) < 10 {
-		t.Errorf("the venue listed %d linear perpetuals, which is fewer than it has", len(metas))
+	if len(metadataList) < 10 {
+		t.Errorf("the venue listed %d linear perpetuals, which is fewer than it has", len(metadataList))
 	}
 
-	for _, m := range metas {
-		if m.Env.Instrument.Canonical != "BTC_USDT" {
+	for _, metadata := range metadataList {
+		if metadata.Env.Instrument.Canonical != "BTC_USDT" {
 			continue
 		}
-		if m.TickSize <= 0 || m.LotSize <= 0 || m.ContractMultiplier <= 0 {
-			t.Errorf("BTC_USDT tick=%d lot=%d multiplier=%d", m.TickSize, m.LotSize, m.ContractMultiplier)
+		if metadata.TickSize <= 0 || metadata.LotSize <= 0 || metadata.ContractMultiplier <= 0 {
+			t.Errorf("BTC_USDT tick=%d lot=%d multiplier=%d", metadata.TickSize, metadata.LotSize, metadata.ContractMultiplier)
 		}
 		t.Logf("BTC_USDT tick %s lot %s multiplier %s active %v",
-			price.Price(m.TickSize), price.Size(m.LotSize),
-			price.Size(m.ContractMultiplier), m.Active)
+			price.Price(metadata.TickSize), price.Size(metadata.LotSize),
+			price.Size(metadata.ContractMultiplier), metadata.Active)
 		return
 	}
 	t.Error("the venue listed no BTC_USDT perpetual")

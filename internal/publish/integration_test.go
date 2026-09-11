@@ -49,7 +49,7 @@ func TestMain(m *testing.M) {
 	}
 
 	// The settings from deploy/redis.conf, which are what these tests exercise.
-	res, err := pool.RunWithOptions(&dockertest.RunOptions{
+	resource, err := pool.RunWithOptions(&dockertest.RunOptions{
 		Repository: "redis",
 		Tag:        "8-alpine",
 		Cmd: []string{
@@ -59,29 +59,29 @@ func TestMain(m *testing.M) {
 			"--maxmemory-policy", "noeviction",
 			"--notify-keyspace-events", "Ex",
 		},
-	}, func(cfg *docker.HostConfig) {
-		cfg.AutoRemove = true
-		cfg.RestartPolicy = docker.RestartPolicy{Name: "no"}
+	}, func(configuration *docker.HostConfig) {
+		configuration.AutoRemove = true
+		configuration.RestartPolicy = docker.RestartPolicy{Name: "no"}
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "start redis: %v\n", err)
 		os.Exit(1)
 	}
-	_ = res.Expire(600) // never outlive the test run by more than 10 minutes
+	_ = resource.Expire(600) // never outlive the test run by more than 10 minutes
 
-	redisAddr = "127.0.0.1:" + res.GetPort("6379/tcp")
+	redisAddr = "127.0.0.1:" + resource.GetPort("6379/tcp")
 	if err := pool.Retry(func() error {
-		c := redis.NewClient(&redis.Options{Addr: redisAddr})
-		defer c.Close()
-		return c.Ping(context.Background()).Err()
+		redisClient := redis.NewClient(&redis.Options{Addr: redisAddr})
+		defer redisClient.Close()
+		return redisClient.Ping(context.Background()).Err()
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "redis never became ready: %v\n", err)
-		_ = pool.Purge(res)
+		_ = pool.Purge(resource)
 		os.Exit(1)
 	}
 
 	code := m.Run()
-	_ = pool.Purge(res)
+	_ = pool.Purge(resource)
 	os.Exit(code)
 }
 
@@ -89,9 +89,9 @@ func TestMain(m *testing.M) {
 
 func newPublisher(t *testing.T) *publish.RedisPublisher {
 	t.Helper()
-	p, err := publish.NewRedis(context.Background(), publish.Options{
+	publisher, err := publish.NewRedis(context.Background(), publish.Options{
 		Addr:          redisAddr,
-		DB:            testDB,
+		Database:      testDB,
 		DialTimeout:   2 * time.Second,
 		ReadTimeout:   2 * time.Second,
 		PoolSize:      8,
@@ -104,28 +104,28 @@ func newPublisher(t *testing.T) *publish.RedisPublisher {
 	if err != nil {
 		t.Fatalf("NewRedis: %v", err)
 	}
-	t.Cleanup(func() { p.Close() })
-	return p
+	t.Cleanup(func() { publisher.Close() })
+	return publisher
 }
 
 func newClient(t *testing.T) *redis.Client {
 	t.Helper()
-	c := redis.NewClient(&redis.Options{Addr: redisAddr, DB: testDB})
-	t.Cleanup(func() { c.Close() })
-	return c
+	redisClient := redis.NewClient(&redis.Options{Addr: redisAddr, DB: testDB})
+	t.Cleanup(func() { redisClient.Close() })
+	return redisClient
 }
 
-func testKey(t *testing.T, ch manoochv1.Channel) string {
+func testKey(t *testing.T, channel manoochv1.Channel) string {
 	t.Helper()
 	// One key per test, so tests cannot see each other's sequence numbers.
-	sym := strings.ToUpper(strings.NewReplacer("/", "_", "-", "_").Replace(t.Name()))
-	sym = strings.Map(func(r rune) rune {
-		if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
-			return r
+	symbol := strings.ToUpper(strings.NewReplacer("/", "_", "-", "_").Replace(t.Name()))
+	symbol = strings.Map(func(letter rune) rune {
+		if (letter >= 'A' && letter <= 'Z') || (letter >= '0' && letter <= '9') {
+			return letter
 		}
 		return -1
-	}, sym)
-	return publish.Key("TESTVENUE", manoochv1.MarketType_MARKET_TYPE_PERP_LINEAR, sym+"_USDT", ch)
+	}, symbol)
+	return publish.Key("TESTVENUE", manoochv1.MarketType_MARKET_TYPE_PERP_LINEAR, symbol+"_USDT", channel)
 }
 
 func mark(t *testing.T, symbol string) *manoochv1.MarkPrice {
@@ -134,7 +134,7 @@ func mark(t *testing.T, symbol string) *manoochv1.MarkPrice {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, _ := price.ParsePrice("68432.15")
+	price, _ := price.ParsePrice("68432.15")
 	now := time.Now()
 	return &manoochv1.MarkPrice{
 		Env: &manoochv1.Envelope{
@@ -146,7 +146,7 @@ func mark(t *testing.T, symbol string) *manoochv1.MarkPrice {
 			Source:         manoochv1.Source_SOURCE_WEBSOCKET,
 			Status:         manoochv1.Status_STATUS_HEALTHY,
 		},
-		MarkPrice: int64(p),
+		MarkPrice: int64(price),
 	}
 }
 
@@ -156,44 +156,44 @@ func mark(t *testing.T, symbol string) *manoochv1.MarkPrice {
 // value and a delivered notification.
 func TestPublishWritesKeyAndChannel(t *testing.T) {
 	ctx := context.Background()
-	pub := newPublisher(t)
-	rdb := newClient(t)
+	publisher := newPublisher(t)
+	redisClient := newClient(t)
 	key := testKey(t, manoochv1.Channel_CHANNEL_MARK_PRICE)
 
-	sub := rdb.Subscribe(ctx, key)
-	defer sub.Close()
-	if _, err := sub.Receive(ctx); err != nil {
+	subscription := redisClient.Subscribe(ctx, key)
+	defer subscription.Close()
+	if _, err := subscription.Receive(ctx); err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
 
-	msg := mark(t, "BTC_USDT")
-	if err := pub.Publish(ctx, key, msg, 5*time.Second); err != nil {
+	markPrice := mark(t, "BTC_USDT")
+	if err := publisher.Publish(ctx, key, markPrice, 5*time.Second); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
 
 	// The publisher owns these; the caller must not have to set them.
-	env := msg.GetEnv()
-	if env.PublishSeq != 1 {
-		t.Errorf("publish_seq = %d, want 1", env.PublishSeq)
+	envelope := markPrice.GetEnv()
+	if envelope.PublishSeq != 1 {
+		t.Errorf("publish_seq = %d, want 1", envelope.PublishSeq)
 	}
-	if env.InstanceId == "" {
+	if envelope.InstanceId == "" {
 		t.Error("instance_id not set")
 	}
-	if env.SchemaVersion != 2 {
-		t.Errorf("schema_version = %d, want 2", env.SchemaVersion)
+	if envelope.SchemaVersion != 2 {
+		t.Errorf("schema_version = %d, want 2", envelope.SchemaVersion)
 	}
-	if env.PublishTimeNs < env.RecvTimeNs {
-		t.Errorf("publish_time_ns %d precedes recv_time_ns %d", env.PublishTimeNs, env.RecvTimeNs)
+	if envelope.PublishTimeNs < envelope.RecvTimeNs {
+		t.Errorf("publish_time_ns %d precedes recv_time_ns %d", envelope.PublishTimeNs, envelope.RecvTimeNs)
 	}
 
 	// Delivered over Pub/Sub.
 	select {
-	case m := <-sub.Channel():
+	case message := <-subscription.Channel():
 		var got manoochv1.MarkPrice
-		if err := proto.Unmarshal([]byte(m.Payload), &got); err != nil {
+		if err := proto.Unmarshal([]byte(message.Payload), &got); err != nil {
 			t.Fatalf("unmarshal published: %v", err)
 		}
-		if !proto.Equal(&got, msg) {
+		if !proto.Equal(&got, markPrice) {
 			t.Errorf("published message differs from what was sent")
 		}
 	case <-time.After(waitShort):
@@ -201,15 +201,15 @@ func TestPublishWritesKeyAndChannel(t *testing.T) {
 	}
 
 	// And readable as the last value, which is what a cold consumer gets.
-	b, err := rdb.Get(ctx, key).Bytes()
+	data, err := redisClient.Get(ctx, key).Bytes()
 	if err != nil {
 		t.Fatalf("GET %s: %v", key, err)
 	}
 	var cached manoochv1.MarkPrice
-	if err := proto.Unmarshal(b, &cached); err != nil {
+	if err := proto.Unmarshal(data, &cached); err != nil {
 		t.Fatalf("unmarshal cached: %v", err)
 	}
-	if !proto.Equal(&cached, msg) {
+	if !proto.Equal(&cached, markPrice) {
 		t.Errorf("cached message differs from what was sent")
 	}
 }
@@ -218,34 +218,34 @@ func TestPublishWritesKeyAndChannel(t *testing.T) {
 // what M2's REST fallback will be triggered by.
 func TestKeyExpiresAndNotifies(t *testing.T) {
 	ctx := context.Background()
-	pub := newPublisher(t)
-	rdb := newClient(t)
+	publisher := newPublisher(t)
+	redisClient := newClient(t)
 	key := testKey(t, manoochv1.Channel_CHANNEL_MARK_PRICE)
 
-	events := rdb.PSubscribe(ctx, fmt.Sprintf("__keyevent@%d__:expired", testDB))
-	defer events.Close()
-	if _, err := events.Receive(ctx); err != nil {
+	subscription := redisClient.PSubscribe(ctx, fmt.Sprintf("__keyevent@%d__:expired", testDB))
+	defer subscription.Close()
+	if _, err := subscription.Receive(ctx); err != nil {
 		t.Fatalf("subscribe to keyspace events: %v", err)
 	}
 
-	const ttl = 300 * time.Millisecond
-	if err := pub.Publish(ctx, key, mark(t, "BTC_USDT"), ttl); err != nil {
+	const timeToLive = 300 * time.Millisecond
+	if err := publisher.Publish(ctx, key, mark(t, "BTC_USDT"), timeToLive); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
 
-	pttl, err := rdb.PTTL(ctx, key).Result()
+	pttl, err := redisClient.PTTL(ctx, key).Result()
 	if err != nil {
 		t.Fatalf("PTTL: %v", err)
 	}
-	if pttl <= 0 || pttl > ttl {
-		t.Errorf("PTTL = %v, want (0, %v]", pttl, ttl)
+	if pttl <= 0 || pttl > timeToLive {
+		t.Errorf("PTTL = %v, want (0, %v]", pttl, timeToLive)
 	}
 
 	deadline := time.After(waitShort)
 	for {
 		select {
-		case m := <-events.Channel():
-			if m.Payload == key {
+		case message := <-subscription.Channel():
+			if message.Payload == key {
 				return // expired, and said so
 			}
 		case <-deadline:
@@ -258,16 +258,16 @@ func TestKeyExpiresAndNotifies(t *testing.T) {
 // expiring key would call a working stream dead.
 func TestZeroTTLPersists(t *testing.T) {
 	ctx := context.Background()
-	pub := newPublisher(t)
-	rdb := newClient(t)
+	publisher := newPublisher(t)
+	redisClient := newClient(t)
 	key := testKey(t, manoochv1.Channel_CHANNEL_METADATA)
 
-	if err := pub.Publish(ctx, key, mark(t, "BTC_USDT"), 0); err != nil {
+	if err := publisher.Publish(ctx, key, mark(t, "BTC_USDT"), 0); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
-	t.Cleanup(func() { rdb.Del(context.Background(), key) })
+	t.Cleanup(func() { redisClient.Del(context.Background(), key) })
 
-	pttl, err := rdb.PTTL(ctx, key).Result()
+	pttl, err := redisClient.PTTL(ctx, key).Result()
 	if err != nil {
 		t.Fatalf("PTTL: %v", err)
 	}
@@ -282,24 +282,24 @@ func TestZeroTTLPersists(t *testing.T) {
 // from a quiet market.
 func TestPublishSeqIsGapFree(t *testing.T) {
 	ctx := context.Background()
-	pub := newPublisher(t)
-	rdb := newClient(t)
+	publisher := newPublisher(t)
+	redisClient := newClient(t)
 	key := testKey(t, manoochv1.Channel_CHANNEL_MARK_PRICE)
 
-	const n = 10_000
-	sub := rdb.Subscribe(ctx, key)
-	defer sub.Close()
-	if _, err := sub.Receive(ctx); err != nil {
+	const messageCount = 10_000
+	subscription := redisClient.Subscribe(ctx, key)
+	defer subscription.Close()
+	if _, err := subscription.Receive(ctx); err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
-	ch := sub.ChannelSize(n + 1000)
+	messages := subscription.ChannelSize(messageCount + 1000)
 
-	msg := mark(t, "BTC_USDT")
-	for i := 1; i <= n; i++ {
-		if err := pub.Publish(ctx, key, msg, time.Minute); err != nil {
+	markPrice := mark(t, "BTC_USDT")
+	for i := 1; i <= messageCount; i++ {
+		if err := publisher.Publish(ctx, key, markPrice, time.Minute); err != nil {
 			t.Fatalf("Publish %d: %v", i, err)
 		}
-		if got := msg.GetEnv().PublishSeq; got != uint64(i) {
+		if got := markPrice.GetEnv().PublishSeq; got != uint64(i) {
 			t.Fatalf("publish %d was assigned publish_seq %d", i, got)
 		}
 	}
@@ -307,19 +307,19 @@ func TestPublishSeqIsGapFree(t *testing.T) {
 	// And the same sequence arrives on the wire, in order and complete.
 	var last uint64
 	deadline := time.After(30 * time.Second)
-	for last < n {
+	for last < messageCount {
 		select {
-		case m := <-ch:
+		case message := <-messages:
 			var got manoochv1.MarkPrice
-			if err := proto.Unmarshal([]byte(m.Payload), &got); err != nil {
+			if err := proto.Unmarshal([]byte(message.Payload), &got); err != nil {
 				t.Fatalf("unmarshal: %v", err)
 			}
-			if seq := got.GetEnv().PublishSeq; seq != last+1 {
-				t.Fatalf("publish_seq jumped from %d to %d", last, seq)
+			if sequence := got.GetEnv().PublishSeq; sequence != last+1 {
+				t.Fatalf("publish_seq jumped from %d to %d", last, sequence)
 			}
 			last++
 		case <-deadline:
-			t.Fatalf("only %d of %d messages delivered", last, n)
+			t.Fatalf("only %d of %d messages delivered", last, messageCount)
 		}
 	}
 }
@@ -332,26 +332,26 @@ func TestInstanceIDDistinguishesRestartFromDrop(t *testing.T) {
 	key := testKey(t, manoochv1.Channel_CHANNEL_MARK_PRICE)
 
 	first := newPublisher(t)
-	msg := mark(t, "BTC_USDT")
+	message := mark(t, "BTC_USDT")
 	for i := 1; i <= 3; i++ {
-		if err := first.Publish(ctx, key, msg, time.Minute); err != nil {
+		if err := first.Publish(ctx, key, message, time.Minute); err != nil {
 			t.Fatalf("Publish: %v", err)
 		}
 	}
-	firstInstance := msg.GetEnv().InstanceId
-	if msg.GetEnv().PublishSeq != 3 {
-		t.Fatalf("publish_seq = %d, want 3", msg.GetEnv().PublishSeq)
+	firstInstance := message.GetEnv().InstanceId
+	if message.GetEnv().PublishSeq != 3 {
+		t.Fatalf("publish_seq = %d, want 3", message.GetEnv().PublishSeq)
 	}
 
 	second := newPublisher(t)
-	msg2 := mark(t, "BTC_USDT")
-	if err := second.Publish(ctx, key, msg2, time.Minute); err != nil {
+	secondMessage := mark(t, "BTC_USDT")
+	if err := second.Publish(ctx, key, secondMessage, time.Minute); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
-	if got := msg2.GetEnv().PublishSeq; got != 1 {
+	if got := secondMessage.GetEnv().PublishSeq; got != 1 {
 		t.Errorf("publish_seq after restart = %d, want 1", got)
 	}
-	if got := msg2.GetEnv().InstanceId; got == firstInstance {
+	if got := secondMessage.GetEnv().InstanceId; got == firstInstance {
 		t.Errorf("instance_id unchanged across publishers: %q", got)
 	}
 }
@@ -361,35 +361,35 @@ func TestInstanceIDDistinguishesRestartFromDrop(t *testing.T) {
 // drops last-value keys and working streams read as stale.
 func TestNoEvictionSurfacesWriteErrors(t *testing.T) {
 	ctx := context.Background()
-	pub := newPublisher(t)
-	rdb := newClient(t)
+	publisher := newPublisher(t)
+	redisClient := newClient(t)
 	key := testKey(t, manoochv1.Channel_CHANNEL_MARK_PRICE)
 
 	t.Cleanup(func() {
-		bg := context.Background()
-		rdb.ConfigSet(bg, "maxmemory", "0")
-		rdb.Del(bg, "filler")
+		background := context.Background()
+		redisClient.ConfigSet(background, "maxmemory", "0")
+		redisClient.Del(background, "filler")
 	})
 
 	// Fill past the cap we are about to impose.
 	filler := strings.Repeat("x", 64*1024)
 	for i := range 100 {
-		if err := rdb.Set(ctx, fmt.Sprintf("filler:%d", i), filler, time.Minute).Err(); err != nil {
+		if err := redisClient.Set(ctx, fmt.Sprintf("filler:%d", i), filler, time.Minute).Err(); err != nil {
 			t.Fatalf("filling: %v", err)
 		}
 	}
 	t.Cleanup(func() {
-		bg := context.Background()
+		background := context.Background()
 		for i := range 100 {
-			rdb.Del(bg, fmt.Sprintf("filler:%d", i))
+			redisClient.Del(background, fmt.Sprintf("filler:%d", i))
 		}
 	})
 
-	if err := rdb.ConfigSet(ctx, "maxmemory", "2mb").Err(); err != nil {
+	if err := redisClient.ConfigSet(ctx, "maxmemory", "2mb").Err(); err != nil {
 		t.Fatalf("CONFIG SET maxmemory: %v", err)
 	}
 
-	err := pub.Publish(ctx, key, mark(t, "BTC_USDT"), time.Minute)
+	err := publisher.Publish(ctx, key, mark(t, "BTC_USDT"), time.Minute)
 	if err == nil {
 		t.Fatal("Publish succeeded against an exhausted noeviction instance")
 	}

@@ -50,7 +50,7 @@ func TestMain(m *testing.M) {
 	}
 
 	// The settings from deploy/redis.conf, which are what these exercise.
-	res, err := pool.RunWithOptions(&dockertest.RunOptions{
+	resource, err := pool.RunWithOptions(&dockertest.RunOptions{
 		Repository: "redis",
 		Tag:        "8-alpine",
 		Cmd: []string{
@@ -60,53 +60,53 @@ func TestMain(m *testing.M) {
 			"--maxmemory-policy", "noeviction",
 			"--notify-keyspace-events", "Ex",
 		},
-	}, func(cfg *docker.HostConfig) {
-		cfg.AutoRemove = true
-		cfg.RestartPolicy = docker.RestartPolicy{Name: "no"}
+	}, func(configuration *docker.HostConfig) {
+		configuration.AutoRemove = true
+		configuration.RestartPolicy = docker.RestartPolicy{Name: "no"}
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "start redis: %v\n", err)
 		os.Exit(1)
 	}
-	_ = res.Expire(600)
+	_ = resource.Expire(600)
 
-	redisAddr = "127.0.0.1:" + res.GetPort("6379/tcp")
+	redisAddr = "127.0.0.1:" + resource.GetPort("6379/tcp")
 	if err := pool.Retry(func() error {
-		c := redis.NewClient(&redis.Options{Addr: redisAddr})
-		defer c.Close()
-		return c.Ping(context.Background()).Err()
+		redisClient := redis.NewClient(&redis.Options{Addr: redisAddr})
+		defer redisClient.Close()
+		return redisClient.Ping(context.Background()).Err()
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "redis never became ready: %v\n", err)
-		_ = pool.Purge(res)
+		_ = pool.Purge(resource)
 		os.Exit(1)
 	}
 
 	code := m.Run()
-	_ = pool.Purge(res)
+	_ = pool.Purge(resource)
 	os.Exit(code)
 }
 
 // ---------- harness ----------
 
 type live struct {
-	pub     *publish.RedisPublisher
-	rdb     *redis.Client
-	adapter *coretest.Adapter
-	tracker *health.Tracker
-	watcher *fallback.Watcher
-	specs   []core.StreamSpec
+	publisher      *publish.RedisPublisher
+	redisClient    *redis.Client
+	adapter        *coretest.Adapter
+	tracker        *health.Tracker
+	watcher        *fallback.Watcher
+	specifications []core.StreamSpec
 
 	expiries chan core.StreamSpec
 }
 
-type liveOptions struct {
+type options struct {
 	symbols []string
 	// channels narrows the streams under test. A key that has never been
 	// written is indistinguishable from one that expired — which is correct,
 	// and makes a single-channel assertion noisy unless the others are simply
 	// not configured.
 	channels      []manoochv1.Channel
-	ttl           time.Duration
+	timeToLive    time.Duration
 	heartbeat     time.Duration
 	maxConcurrent int
 	maxDuration   time.Duration
@@ -117,50 +117,50 @@ type liveOptions struct {
 	run bool
 }
 
-func newLive(t *testing.T, o liveOptions) *live {
+func newLive(t *testing.T, options options) *live {
 	t.Helper()
 
-	if len(o.symbols) == 0 {
-		o.symbols = []string{"BTC_USDT"}
+	if len(options.symbols) == 0 {
+		options.symbols = []string{"BTC_USDT"}
 	}
-	if o.ttl == 0 {
-		o.ttl = 300 * time.Millisecond
+	if options.timeToLive == 0 {
+		options.timeToLive = 300 * time.Millisecond
 	}
-	if o.heartbeat == 0 {
-		o.heartbeat = 200 * time.Millisecond
+	if options.heartbeat == 0 {
+		options.heartbeat = 200 * time.Millisecond
 	}
-	if o.maxConcurrent == 0 {
-		o.maxConcurrent = 4
+	if options.maxConcurrent == 0 {
+		options.maxConcurrent = 4
 	}
-	if o.maxDuration == 0 {
-		o.maxDuration = 5 * time.Minute
+	if options.maxDuration == 0 {
+		options.maxDuration = 5 * time.Minute
 	}
-	if o.sweepInterval == 0 {
-		o.sweepInterval = 100 * time.Millisecond
+	if options.sweepInterval == 0 {
+		options.sweepInterval = 100 * time.Millisecond
 	}
-	if o.pollInterval == 0 {
-		o.pollInterval = 50 * time.Millisecond
+	if options.pollInterval == 0 {
+		options.pollInterval = 50 * time.Millisecond
 	}
 
-	specs, err := coretest.Specs(o.symbols...)
+	specifications, err := coretest.Specifications(options.symbols...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(o.channels) > 0 {
+	if len(options.channels) > 0 {
 		var narrowed []core.StreamSpec
-		for _, spec := range specs {
-			for _, ch := range o.channels {
-				if spec.Channel == ch {
-					narrowed = append(narrowed, spec)
+		for _, specification := range specifications {
+			for _, channel := range options.channels {
+				if specification.Channel == channel {
+					narrowed = append(narrowed, specification)
 				}
 			}
 		}
-		specs = narrowed
+		specifications = narrowed
 	}
 
-	pub, err := publish.NewRedis(context.Background(), publish.Options{
+	publisher, err := publish.NewRedis(context.Background(), publish.Options{
 		Addr:          redisAddr,
-		DB:            testDB,
+		Database:      testDB,
 		DialTimeout:   2 * time.Second,
 		ReadTimeout:   2 * time.Second,
 		PoolSize:      8,
@@ -173,57 +173,57 @@ func newLive(t *testing.T, o liveOptions) *live {
 	if err != nil {
 		t.Fatalf("NewRedis: %v", err)
 	}
-	t.Cleanup(func() { pub.Close() })
+	t.Cleanup(func() { publisher.Close() })
 
-	l := &live{
-		pub:      pub,
-		rdb:      pub.Redis(),
-		adapter:  &coretest.Adapter{TTL: o.ttl, Channels: o.channels},
-		specs:    specs,
-		expiries: make(chan core.StreamSpec, 64),
+	harness := &live{
+		publisher:      publisher,
+		redisClient:    publisher.Redis(),
+		adapter:        &coretest.Adapter{TimeToLive: options.timeToLive, Channels: options.channels},
+		specifications: specifications,
+		expiries:       make(chan core.StreamSpec, 64),
 	}
 
 	// Every test starts from a clean keyspace, or one test's leftovers are
 	// another's "already expired".
-	l.clear(t)
-	t.Cleanup(func() { l.clear(t) })
+	harness.clear(t)
+	t.Cleanup(func() { harness.clear(t) })
 
-	l.tracker, err = health.New(health.Options{
+	harness.tracker, err = health.New(health.Options{
 		Venue:               coretest.Venue,
-		Publisher:           pub,
+		Publisher:           publisher,
 		Metrics:             observability.NewMetrics(),
 		Log:                 quiet(),
-		HeartbeatInterval:   o.heartbeat,
+		HeartbeatInterval:   options.heartbeat,
 		ClockSkewDegradedMS: 2000,
 		ClockSkewStaleMS:    10000,
-		FallbackMaxDuration: o.maxDuration,
+		FallbackMaxDuration: options.maxDuration,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, spec := range specs {
-		sym, _ := l.adapter.VenueSymbol(spec.Instrument)
-		l.tracker.Register(spec, sym, "test-0")
+	for _, specification := range specifications {
+		symbol, _ := harness.adapter.VenueSymbol(specification.Instrument)
+		harness.tracker.Register(specification, symbol, "test-0")
 	}
-	l.tracker.SocketState("test-0", health.SocketConnected, "")
+	harness.tracker.SocketState("test-0", health.SocketConnected, "")
 
-	l.watcher, err = fallback.New(fallback.Options{
+	harness.watcher, err = fallback.New(fallback.Options{
 		Venue:              coretest.Venue,
-		Adapter:            l.adapter,
-		Publisher:          pub,
-		Redis:              l.rdb,
-		DB:                 testDB,
-		Health:             l.tracker,
+		Adapter:            harness.adapter,
+		Publisher:          publisher,
+		Redis:              harness.redisClient,
+		Database:           testDB,
+		Health:             harness.tracker,
 		Metrics:            observability.NewMetrics(),
 		Log:                quiet(),
-		Specs:              specs,
-		MaxConcurrentPolls: o.maxConcurrent,
-		PollInterval:       o.pollInterval,
-		SweepInterval:      o.sweepInterval,
-		MaxDuration:        o.maxDuration,
-		OnExpired: func(spec core.StreamSpec) {
+		Specifications:     specifications,
+		MaxConcurrentPolls: options.maxConcurrent,
+		PollInterval:       options.pollInterval,
+		SweepInterval:      options.sweepInterval,
+		MaxDuration:        options.maxDuration,
+		OnExpired: func(specification core.StreamSpec) {
 			select {
-			case l.expiries <- spec:
+			case harness.expiries <- specification:
 			default:
 			}
 		},
@@ -232,10 +232,10 @@ func newLive(t *testing.T, o liveOptions) *live {
 		t.Fatal(err)
 	}
 
-	if o.run {
+	if options.run {
 		ctx, cancel := context.WithCancel(context.Background())
 		done := make(chan struct{})
-		go func() { defer close(done); l.watcher.Run(ctx) }()
+		go func() { defer close(done); harness.watcher.Run(ctx) }()
 		t.Cleanup(func() {
 			cancel()
 			select {
@@ -245,52 +245,52 @@ func newLive(t *testing.T, o liveOptions) *live {
 			}
 		})
 	}
-	return l
+	return harness
 }
 
 // clear removes every key this venue owns.
-func (l *live) clear(t *testing.T) {
+func (harness *live) clear(t *testing.T) {
 	t.Helper()
 	ctx := context.Background()
-	iter := l.rdb.Scan(ctx, 0, publish.MatchPattern(coretest.Venue), 500).Iterator()
+	iter := harness.redisClient.Scan(ctx, 0, publish.MatchPattern(coretest.Venue), 500).Iterator()
 	for iter.Next(ctx) {
-		l.rdb.Del(ctx, iter.Val())
+		harness.redisClient.Del(ctx, iter.Val())
 	}
 }
 
 // socketMessage publishes a stream the way the supervisor would, which is what
 // makes its key exist and start counting down.
-func (l *live) socketMessage(t *testing.T, spec core.StreamSpec) {
+func (harness *live) socketMessage(t *testing.T, specification core.StreamSpec) {
 	t.Helper()
-	l.watcher.Note(spec)
-	l.tracker.Received(spec)
+	harness.watcher.Note(specification)
+	harness.tracker.Received(specification)
 
-	m := l.adapter.Message(spec, time.Now().UnixNano(), manoochv1.Source_SOURCE_WEBSOCKET)
-	env := m.Proto.(interface{ GetEnv() *manoochv1.Envelope }).GetEnv()
-	env.Status, env.StatusReason = l.tracker.Status(spec)
+	message := harness.adapter.Message(specification, time.Now().UnixNano(), manoochv1.Source_SOURCE_WEBSOCKET)
+	envelope := message.Proto.(interface{ GetEnv() *manoochv1.Envelope }).GetEnv()
+	envelope.Status, envelope.StatusReason = harness.tracker.Status(specification)
 
-	if err := l.pub.Publish(context.Background(), m.Key, m.Proto, m.TTL); err != nil {
-		t.Fatalf("publish %s: %v", m.Key, err)
+	if err := harness.publisher.Publish(context.Background(), message.Key, message.Proto, message.TimeToLive); err != nil {
+		t.Fatalf("publish %s: %v", message.Key, err)
 	}
 }
 
 // envelope reads a key back the way a consumer would.
-func (l *live) envelope(t *testing.T, key string, ch manoochv1.Channel) *manoochv1.Envelope {
+func (harness *live) envelope(t *testing.T, key string, channel manoochv1.Channel) *manoochv1.Envelope {
 	t.Helper()
-	b, err := l.rdb.Get(context.Background(), key).Bytes()
+	data, err := harness.redisClient.Get(context.Background(), key).Bytes()
 	if err != nil {
 		return nil
 	}
-	_, env, err := publish.Decode(ch, b)
+	_, envelope, err := publish.Decode(channel, data)
 	if err != nil {
 		t.Fatalf("decode %s: %v", key, err)
 	}
-	return env
+	return envelope
 }
 
-func (l *live) exists(key string) bool {
-	n, err := l.rdb.Exists(context.Background(), key).Result()
-	return err == nil && n > 0
+func (harness *live) exists(key string) bool {
+	count, err := harness.redisClient.Exists(context.Background(), key).Result()
+	return err == nil && count > 0
 }
 
 // ---------- tests ----------
@@ -298,25 +298,25 @@ func (l *live) exists(key string) bool {
 // TestKeyExpiryIsTheTrigger: the TTL is the freshness signal, and the key going
 // away is the event everything downstream reacts to.
 func TestKeyExpiryIsTheTrigger(t *testing.T) {
-	l := newLive(t, liveOptions{run: true, ttl: 300 * time.Millisecond, channels: markOnly})
-	spec := l.specs[0]
-	k := key(spec)
+	harness := newLive(t, options{run: true, timeToLive: 300 * time.Millisecond, channels: markOnly})
+	specification := harness.specifications[0]
+	streamKey := key(specification)
 
-	l.socketMessage(t, spec)
-	if !l.exists(k) {
-		t.Fatalf("%s does not exist after publishing it", k)
+	harness.socketMessage(t, specification)
+	if !harness.exists(streamKey) {
+		t.Fatalf("%s does not exist after publishing it", streamKey)
 	}
-	if pttl, err := l.rdb.PTTL(context.Background(), k).Result(); err != nil || pttl <= 0 || pttl > 300*time.Millisecond {
+	if pttl, err := harness.redisClient.PTTL(context.Background(), streamKey).Result(); err != nil || pttl <= 0 || pttl > 300*time.Millisecond {
 		t.Fatalf("PTTL = %v (%v), want (0, 300ms]", pttl, err)
 	}
 
 	select {
-	case got := <-l.expiries:
-		if got != spec {
-			t.Errorf("expiry reported for %s, want %s", got, spec)
+	case got := <-harness.expiries:
+		if got != specification {
+			t.Errorf("expiry reported for %s, want %s", got, specification)
 		}
 	case <-time.After(settle):
-		t.Fatalf("no expiry reported for %s", k)
+		t.Fatalf("no expiry reported for %s", streamKey)
 	}
 }
 
@@ -328,24 +328,24 @@ func TestSweepFindsWhatTheNotificationMissed(t *testing.T) {
 
 	// Notifications off entirely, which is the strongest form of "the event
 	// did not arrive": nothing is published to the keyspace channel at all.
-	l := newLive(t, liveOptions{ttl: 200 * time.Millisecond, sweepInterval: 100 * time.Millisecond, channels: markOnly})
-	if err := l.rdb.ConfigSet(ctx, "notify-keyspace-events", "").Err(); err != nil {
+	harness := newLive(t, options{timeToLive: 200 * time.Millisecond, sweepInterval: 100 * time.Millisecond, channels: markOnly})
+	if err := harness.redisClient.ConfigSet(ctx, "notify-keyspace-events", "").Err(); err != nil {
 		t.Fatalf("disabling keyspace events: %v", err)
 	}
-	t.Cleanup(func() { l.rdb.ConfigSet(context.Background(), "notify-keyspace-events", "Ex") })
+	t.Cleanup(func() { harness.redisClient.ConfigSet(context.Background(), "notify-keyspace-events", "Ex") })
 
 	runCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
-	go func() { defer close(done); l.watcher.Run(runCtx) }()
+	go func() { defer close(done); harness.watcher.Run(runCtx) }()
 	t.Cleanup(func() { cancel(); <-done })
 
-	spec := l.specs[0]
-	l.socketMessage(t, spec)
+	specification := harness.specifications[0]
+	harness.socketMessage(t, specification)
 
 	select {
-	case got := <-l.expiries:
-		if got != spec {
-			t.Errorf("expiry reported for %s, want %s", got, spec)
+	case got := <-harness.expiries:
+		if got != specification {
+			t.Errorf("expiry reported for %s, want %s", got, specification)
 		}
 	case <-time.After(settle):
 		t.Fatal("the sweep did not find an expired key with notifications disabled")
@@ -356,61 +356,61 @@ func TestSweepFindsWhatTheNotificationMissed(t *testing.T) {
 // key expires, REST takes over and says so, and a websocket message hands it
 // back with no restart anywhere.
 func TestFallbackEngagesAndDisengages(t *testing.T) {
-	l := newLive(t, liveOptions{run: true, ttl: 200 * time.Millisecond, channels: markOnly})
-	spec := l.specs[0]
-	k := key(spec)
+	harness := newLive(t, options{run: true, timeToLive: 200 * time.Millisecond, channels: markOnly})
+	specification := harness.specifications[0]
+	streamKey := key(specification)
 
-	l.socketMessage(t, spec)
+	harness.socketMessage(t, specification)
 
 	// The key comes back, written by REST and labelled as such.
 	eventually(t, "fallback to republish the key", func() bool {
-		env := l.envelope(t, k, spec.Channel)
-		return env != nil && env.Source == manoochv1.Source_SOURCE_REST
+		envelope := harness.envelope(t, streamKey, specification.Channel)
+		return envelope != nil && envelope.Source == manoochv1.Source_SOURCE_REST
 	})
-	env := l.envelope(t, k, spec.Channel)
-	if env.Status != manoochv1.Status_STATUS_DEGRADED {
-		t.Errorf("status = %s, want DEGRADED", core.StatusName(env.Status))
+	envelope := harness.envelope(t, streamKey, specification.Channel)
+	if envelope.Status != manoochv1.Status_STATUS_DEGRADED {
+		t.Errorf("status = %s, want DEGRADED", core.StatusName(envelope.Status))
 	}
-	if env.StatusReason == "" {
+	if envelope.StatusReason == "" {
 		t.Error("DEGRADED published with no reason")
 	}
-	if l.watcher.Active() != 1 {
-		t.Errorf("%d pollers active, want 1", l.watcher.Active())
+	if harness.watcher.Active() != 1 {
+		t.Errorf("%d pollers active, want 1", harness.watcher.Active())
 	}
 
 	// The socket comes back. Nothing restarts; the source simply returns.
-	l.socketMessage(t, spec)
-	if l.watcher.Active() != 0 {
-		t.Errorf("%d pollers still active after a websocket message", l.watcher.Active())
+	harness.socketMessage(t, specification)
+	if harness.watcher.Active() != 0 {
+		t.Errorf("%d pollers still active after a websocket message", harness.watcher.Active())
 	}
-	env = l.envelope(t, k, spec.Channel)
-	if env.Source != manoochv1.Source_SOURCE_WEBSOCKET {
-		t.Errorf("source = %s, want WEBSOCKET", core.SourceName(env.Source))
+	envelope = harness.envelope(t, streamKey, specification.Channel)
+	if envelope.Source != manoochv1.Source_SOURCE_WEBSOCKET {
+		t.Errorf("source = %s, want WEBSOCKET", core.SourceName(envelope.Source))
 	}
-	if env.Status != manoochv1.Status_STATUS_HEALTHY {
-		t.Errorf("status = %s (%q), want HEALTHY", core.StatusName(env.Status), env.StatusReason)
+	if envelope.Status != manoochv1.Status_STATUS_HEALTHY {
+		t.Errorf("status = %s (%q), want HEALTHY", core.StatusName(envelope.Status), envelope.StatusReason)
 	}
 }
 
 // TestFallbackPastMaxDurationGoesStale: long-running fallback is a failure, not
 // a steady state, and the value on the wire has to say so.
 func TestFallbackPastMaxDurationGoesStale(t *testing.T) {
-	l := newLive(t, liveOptions{run: true, ttl: 200 * time.Millisecond, maxDuration: 500 * time.Millisecond, channels: markOnly})
-	spec := l.specs[0]
-	k := key(spec)
+	harness := newLive(t, options{run: true, timeToLive: 200 * time.Millisecond, maxDuration: 500 * time.Millisecond, channels: markOnly})
+	specification := harness.specifications[0]
+	streamKey := key(specification)
 
-	l.socketMessage(t, spec)
+	harness.socketMessage(t, specification)
 
 	eventually(t, "fallback to escalate to stale", func() bool {
-		env := l.envelope(t, k, spec.Channel)
-		return env != nil && env.Status == manoochv1.Status_STATUS_STALE
+		envelope := harness.envelope(t, streamKey, specification.Channel)
+		return envelope != nil && envelope.Status == manoochv1.Status_STATUS_STALE
 	})
 
 	// Still REST, still being published: giving up entirely would leave a
 	// consumer with no value rather than one labelled not to trade on.
-	env := l.envelope(t, k, spec.Channel)
-	if env.Source != manoochv1.Source_SOURCE_REST {
-		t.Errorf("source = %s, want REST", core.SourceName(env.Source))
+	envelope := harness.envelope(t, streamKey, specification.Channel)
+	if envelope.Source != manoochv1.Source_SOURCE_REST {
+		t.Errorf("source = %s, want REST", core.SourceName(envelope.Source))
 	}
 }
 
@@ -418,25 +418,25 @@ func TestFallbackPastMaxDurationGoesStale(t *testing.T) {
 // rather than queued, because a queued poll arrives after it stopped being
 // worth having and is published as though it were current.
 func TestConcurrencyCapLeavesTheExcessStale(t *testing.T) {
-	l := newLive(t, liveOptions{run: true, ttl: 200 * time.Millisecond, maxConcurrent: 2})
+	harness := newLive(t, options{run: true, timeToLive: 200 * time.Millisecond, maxConcurrent: 2})
 
-	for _, spec := range l.specs {
-		l.socketMessage(t, spec)
+	for _, specification := range harness.specifications {
+		harness.socketMessage(t, specification)
 	}
 
-	eventually(t, "the cap to be reached", func() bool { return l.watcher.Active() == 2 })
+	eventually(t, "the cap to be reached", func() bool { return harness.watcher.Active() == 2 })
 
 	eventually(t, "the excess stream to go stale", func() bool {
 		stale := 0
-		for _, spec := range l.specs {
-			if st, reason := l.tracker.Status(spec); st == manoochv1.Status_STATUS_STALE && reason == "fallback at capacity" {
+		for _, specification := range harness.specifications {
+			if status, reason := harness.tracker.Status(specification); status == manoochv1.Status_STATUS_STALE && reason == "fallback at capacity" {
 				stale++
 			}
 		}
 		return stale == 1
 	})
 
-	if got := l.watcher.Active(); got != 2 {
+	if got := harness.watcher.Active(); got != 2 {
 		t.Errorf("%d pollers active, want the cap of 2; the excess was queued rather than refused", got)
 	}
 }
@@ -446,45 +446,45 @@ func TestConcurrencyCapLeavesTheExcessStale(t *testing.T) {
 // publisher is dead" are the same observation.
 func TestHealthPublishesOnTransitionAndHeartbeat(t *testing.T) {
 	const heartbeat = 200 * time.Millisecond
-	l := newLive(t, liveOptions{heartbeat: heartbeat, ttl: time.Minute, channels: markOnly})
+	harness := newLive(t, options{heartbeat: heartbeat, timeToLive: time.Minute, channels: markOnly})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { defer close(done); l.tracker.Run(ctx) }()
+	go func() { defer close(done); harness.tracker.Run(ctx) }()
 
-	spec := l.specs[0]
-	instrumentKey := publish.Key(coretest.Venue, spec.Instrument.MarketType, spec.Instrument.Canonical(), manoochv1.Channel_CHANNEL_HEALTH)
+	specification := harness.specifications[0]
+	instrumentKey := publish.Key(coretest.Venue, specification.Instrument.MarketType, specification.Instrument.Canonical(), manoochv1.Channel_CHANNEL_HEALTH)
 	venueKey := publish.VenueKey(coretest.Venue, publish.SubjectHealth)
 
 	eventually(t, "the health keys to appear", func() bool {
-		return l.exists(instrumentKey) && l.exists(venueKey)
+		return harness.exists(instrumentKey) && harness.exists(venueKey)
 	})
 
 	// The TTL is three heartbeats, so a stopped publisher is visible rather
 	// than looking like the last state forever.
-	pttl, err := l.rdb.PTTL(context.Background(), instrumentKey).Result()
+	pttl, err := harness.redisClient.PTTL(context.Background(), instrumentKey).Result()
 	if err != nil || pttl <= 0 || pttl > 3*heartbeat {
 		t.Fatalf("health key PTTL = %v (%v), want (0, %v]", pttl, err, 3*heartbeat)
 	}
 
 	// The heartbeat republishes with nothing changed.
-	first := l.envelope(t, instrumentKey, manoochv1.Channel_CHANNEL_HEALTH).PublishSeq
+	first := harness.envelope(t, instrumentKey, manoochv1.Channel_CHANNEL_HEALTH).PublishSeq
 	eventually(t, "a heartbeat with nothing changed", func() bool {
-		env := l.envelope(t, instrumentKey, manoochv1.Channel_CHANNEL_HEALTH)
-		return env != nil && env.PublishSeq > first
+		envelope := harness.envelope(t, instrumentKey, manoochv1.Channel_CHANNEL_HEALTH)
+		return envelope != nil && envelope.PublishSeq > first
 	})
 
 	// A transition does not wait for the next tick.
-	l.tracker.Leaked(2)
+	harness.tracker.Leaked(2)
 	eventually(t, "the transition to reach the venue key", func() bool {
-		env := l.envelope(t, venueKey, manoochv1.Channel_CHANNEL_HEALTH)
-		return env != nil && env.Status == manoochv1.Status_STATUS_DEGRADED && env.StatusReason == "leaked goroutines: 2"
+		envelope := harness.envelope(t, venueKey, manoochv1.Channel_CHANNEL_HEALTH)
+		return envelope != nil && envelope.Status == manoochv1.Status_STATUS_DEGRADED && envelope.StatusReason == "leaked goroutines: 2"
 	})
 
 	// And the channel is detectably dead once the publisher stops.
 	cancel()
 	<-done
 	eventually(t, "the health key to expire after the publisher stopped", func() bool {
-		return !l.exists(instrumentKey) && !l.exists(venueKey)
+		return !harness.exists(instrumentKey) && !harness.exists(venueKey)
 	})
 }
