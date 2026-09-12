@@ -86,6 +86,8 @@ type Channel int32
 
 const (
 	Channel_CHANNEL_UNSPECIFIED Channel = 0
+	// Order books are snapshots; trades remain retired at number 2.
+	Channel_CHANNEL_ORDERBOOK   Channel = 1
 	Channel_CHANNEL_MARK_PRICE  Channel = 3
 	Channel_CHANNEL_INDEX_PRICE Channel = 4
 	Channel_CHANNEL_FUNDING     Channel = 5
@@ -98,6 +100,7 @@ const (
 var (
 	Channel_name = map[int32]string{
 		0: "CHANNEL_UNSPECIFIED",
+		1: "CHANNEL_ORDERBOOK",
 		3: "CHANNEL_MARK_PRICE",
 		4: "CHANNEL_INDEX_PRICE",
 		5: "CHANNEL_FUNDING",
@@ -107,6 +110,7 @@ var (
 	}
 	Channel_value = map[string]int32{
 		"CHANNEL_UNSPECIFIED": 0,
+		"CHANNEL_ORDERBOOK":   1,
 		"CHANNEL_MARK_PRICE":  3,
 		"CHANNEL_INDEX_PRICE": 4,
 		"CHANNEL_FUNDING":     5,
@@ -513,6 +517,126 @@ func (x *Envelope) GetExchangeTimeIsSendTime() bool {
 	return false
 }
 
+type PriceLevel struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Price         int64                  `protobuf:"varint,1,opt,name=price,proto3" json:"price,omitempty"`
+	Size          int64                  `protobuf:"varint,2,opt,name=size,proto3" json:"size,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PriceLevel) Reset() {
+	*x = PriceLevel{}
+	mi := &file_manooch_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PriceLevel) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PriceLevel) ProtoMessage() {}
+
+func (x *PriceLevel) ProtoReflect() protoreflect.Message {
+	mi := &file_manooch_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PriceLevel.ProtoReflect.Descriptor instead.
+func (*PriceLevel) Descriptor() ([]byte, []int) {
+	return file_manooch_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *PriceLevel) GetPrice() int64 {
+	if x != nil {
+		return x.Price
+	}
+	return 0
+}
+
+func (x *PriceLevel) GetSize() int64 {
+	if x != nil {
+		return x.Size
+	}
+	return 0
+}
+
+type OrderBook struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Env           *Envelope              `protobuf:"bytes,1,opt,name=env,proto3" json:"env,omitempty"`
+	Bids          []*PriceLevel          `protobuf:"bytes,2,rep,name=bids,proto3" json:"bids,omitempty"`    // descending price
+	Asks          []*PriceLevel          `protobuf:"bytes,3,rep,name=asks,proto3" json:"asks,omitempty"`    // ascending price
+	Depth         uint32                 `protobuf:"varint,4,opt,name=depth,proto3" json:"depth,omitempty"` // actual N delivered
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *OrderBook) Reset() {
+	*x = OrderBook{}
+	mi := &file_manooch_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *OrderBook) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*OrderBook) ProtoMessage() {}
+
+func (x *OrderBook) ProtoReflect() protoreflect.Message {
+	mi := &file_manooch_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use OrderBook.ProtoReflect.Descriptor instead.
+func (*OrderBook) Descriptor() ([]byte, []int) {
+	return file_manooch_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *OrderBook) GetEnv() *Envelope {
+	if x != nil {
+		return x.Env
+	}
+	return nil
+}
+
+func (x *OrderBook) GetBids() []*PriceLevel {
+	if x != nil {
+		return x.Bids
+	}
+	return nil
+}
+
+func (x *OrderBook) GetAsks() []*PriceLevel {
+	if x != nil {
+		return x.Asks
+	}
+	return nil
+}
+
+func (x *OrderBook) GetDepth() uint32 {
+	if x != nil {
+		return x.Depth
+	}
+	return 0
+}
+
 type MarkPrice struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Env           *Envelope              `protobuf:"bytes,1,opt,name=env,proto3" json:"env,omitempty"`
@@ -523,7 +647,7 @@ type MarkPrice struct {
 
 func (x *MarkPrice) Reset() {
 	*x = MarkPrice{}
-	mi := &file_manooch_proto_msgTypes[2]
+	mi := &file_manooch_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -535,7 +659,7 @@ func (x *MarkPrice) String() string {
 func (*MarkPrice) ProtoMessage() {}
 
 func (x *MarkPrice) ProtoReflect() protoreflect.Message {
-	mi := &file_manooch_proto_msgTypes[2]
+	mi := &file_manooch_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -548,7 +672,7 @@ func (x *MarkPrice) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MarkPrice.ProtoReflect.Descriptor instead.
 func (*MarkPrice) Descriptor() ([]byte, []int) {
-	return file_manooch_proto_rawDescGZIP(), []int{2}
+	return file_manooch_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *MarkPrice) GetEnv() *Envelope {
@@ -575,7 +699,7 @@ type IndexPrice struct {
 
 func (x *IndexPrice) Reset() {
 	*x = IndexPrice{}
-	mi := &file_manooch_proto_msgTypes[3]
+	mi := &file_manooch_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -587,7 +711,7 @@ func (x *IndexPrice) String() string {
 func (*IndexPrice) ProtoMessage() {}
 
 func (x *IndexPrice) ProtoReflect() protoreflect.Message {
-	mi := &file_manooch_proto_msgTypes[3]
+	mi := &file_manooch_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -600,7 +724,7 @@ func (x *IndexPrice) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IndexPrice.ProtoReflect.Descriptor instead.
 func (*IndexPrice) Descriptor() ([]byte, []int) {
-	return file_manooch_proto_rawDescGZIP(), []int{3}
+	return file_manooch_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *IndexPrice) GetEnv() *Envelope {
@@ -629,7 +753,7 @@ type Funding struct {
 
 func (x *Funding) Reset() {
 	*x = Funding{}
-	mi := &file_manooch_proto_msgTypes[4]
+	mi := &file_manooch_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -641,7 +765,7 @@ func (x *Funding) String() string {
 func (*Funding) ProtoMessage() {}
 
 func (x *Funding) ProtoReflect() protoreflect.Message {
-	mi := &file_manooch_proto_msgTypes[4]
+	mi := &file_manooch_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -654,7 +778,7 @@ func (x *Funding) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Funding.ProtoReflect.Descriptor instead.
 func (*Funding) Descriptor() ([]byte, []int) {
-	return file_manooch_proto_rawDescGZIP(), []int{4}
+	return file_manooch_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *Funding) GetEnv() *Envelope {
@@ -702,7 +826,7 @@ type InstrumentMeta struct {
 
 func (x *InstrumentMeta) Reset() {
 	*x = InstrumentMeta{}
-	mi := &file_manooch_proto_msgTypes[5]
+	mi := &file_manooch_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -714,7 +838,7 @@ func (x *InstrumentMeta) String() string {
 func (*InstrumentMeta) ProtoMessage() {}
 
 func (x *InstrumentMeta) ProtoReflect() protoreflect.Message {
-	mi := &file_manooch_proto_msgTypes[5]
+	mi := &file_manooch_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -727,7 +851,7 @@ func (x *InstrumentMeta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InstrumentMeta.ProtoReflect.Descriptor instead.
 func (*InstrumentMeta) Descriptor() ([]byte, []int) {
-	return file_manooch_proto_rawDescGZIP(), []int{5}
+	return file_manooch_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *InstrumentMeta) GetEnv() *Envelope {
@@ -805,7 +929,7 @@ type RateLimit struct {
 
 func (x *RateLimit) Reset() {
 	*x = RateLimit{}
-	mi := &file_manooch_proto_msgTypes[6]
+	mi := &file_manooch_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -817,7 +941,7 @@ func (x *RateLimit) String() string {
 func (*RateLimit) ProtoMessage() {}
 
 func (x *RateLimit) ProtoReflect() protoreflect.Message {
-	mi := &file_manooch_proto_msgTypes[6]
+	mi := &file_manooch_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -830,7 +954,7 @@ func (x *RateLimit) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RateLimit.ProtoReflect.Descriptor instead.
 func (*RateLimit) Descriptor() ([]byte, []int) {
-	return file_manooch_proto_rawDescGZIP(), []int{6}
+	return file_manooch_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *RateLimit) GetEnv() *Envelope {
@@ -859,7 +983,7 @@ type RateLimitBudget struct {
 
 func (x *RateLimitBudget) Reset() {
 	*x = RateLimitBudget{}
-	mi := &file_manooch_proto_msgTypes[7]
+	mi := &file_manooch_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -871,7 +995,7 @@ func (x *RateLimitBudget) String() string {
 func (*RateLimitBudget) ProtoMessage() {}
 
 func (x *RateLimitBudget) ProtoReflect() protoreflect.Message {
-	mi := &file_manooch_proto_msgTypes[7]
+	mi := &file_manooch_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -884,7 +1008,7 @@ func (x *RateLimitBudget) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RateLimitBudget.ProtoReflect.Descriptor instead.
 func (*RateLimitBudget) Descriptor() ([]byte, []int) {
-	return file_manooch_proto_rawDescGZIP(), []int{7}
+	return file_manooch_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *RateLimitBudget) GetKind() string {
@@ -932,7 +1056,7 @@ type Health struct {
 
 func (x *Health) Reset() {
 	*x = Health{}
-	mi := &file_manooch_proto_msgTypes[8]
+	mi := &file_manooch_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -944,7 +1068,7 @@ func (x *Health) String() string {
 func (*Health) ProtoMessage() {}
 
 func (x *Health) ProtoReflect() protoreflect.Message {
-	mi := &file_manooch_proto_msgTypes[8]
+	mi := &file_manooch_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -957,7 +1081,7 @@ func (x *Health) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Health.ProtoReflect.Descriptor instead.
 func (*Health) Descriptor() ([]byte, []int) {
-	return file_manooch_proto_rawDescGZIP(), []int{8}
+	return file_manooch_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *Health) GetEnv() *Envelope {
@@ -1062,7 +1186,16 @@ const file_manooch_proto_rawDesc = "" +
 	"\x0eschema_version\x18\x0e \x01(\rR\rschemaVersion\x12\x1b\n" +
 	"\tprice_exp\x18\x0f \x01(\x05R\bpriceExp\x12\x19\n" +
 	"\bsize_exp\x18\x10 \x01(\x05R\asizeExp\x12:\n" +
-	"\x1aexchange_time_is_send_time\x18\x11 \x01(\bR\x16exchangeTimeIsSendTime\"R\n" +
+	"\x1aexchange_time_is_send_time\x18\x11 \x01(\bR\x16exchangeTimeIsSendTime\"6\n" +
+	"\n" +
+	"PriceLevel\x12\x14\n" +
+	"\x05price\x18\x01 \x01(\x03R\x05price\x12\x12\n" +
+	"\x04size\x18\x02 \x01(\x03R\x04size\"\xa1\x01\n" +
+	"\tOrderBook\x12&\n" +
+	"\x03env\x18\x01 \x01(\v2\x14.manooch.v1.EnvelopeR\x03env\x12*\n" +
+	"\x04bids\x18\x02 \x03(\v2\x16.manooch.v1.PriceLevelR\x04bids\x12*\n" +
+	"\x04asks\x18\x03 \x03(\v2\x16.manooch.v1.PriceLevelR\x04asks\x12\x14\n" +
+	"\x05depth\x18\x04 \x01(\rR\x05depth\"R\n" +
 	"\tMarkPrice\x12&\n" +
 	"\x03env\x18\x01 \x01(\v2\x14.manooch.v1.EnvelopeR\x03env\x12\x1d\n" +
 	"\n" +
@@ -1113,15 +1246,16 @@ const file_manooch_proto_rawDesc = "" +
 	"\x17MARKET_TYPE_PERP_LINEAR\x10\x03\x12\x1c\n" +
 	"\x18MARKET_TYPE_PERP_INVERSE\x10\x04\x12\x1d\n" +
 	"\x19MARKET_TYPE_FUTURE_LINEAR\x10\x05\x12\x1e\n" +
-	"\x1aMARKET_TYPE_FUTURE_INVERSE\x10\x06*\xd8\x01\n" +
+	"\x1aMARKET_TYPE_FUTURE_INVERSE\x10\x06*\xd6\x01\n" +
 	"\aChannel\x12\x17\n" +
-	"\x13CHANNEL_UNSPECIFIED\x10\x00\x12\x16\n" +
+	"\x13CHANNEL_UNSPECIFIED\x10\x00\x12\x15\n" +
+	"\x11CHANNEL_ORDERBOOK\x10\x01\x12\x16\n" +
 	"\x12CHANNEL_MARK_PRICE\x10\x03\x12\x17\n" +
 	"\x13CHANNEL_INDEX_PRICE\x10\x04\x12\x13\n" +
 	"\x0fCHANNEL_FUNDING\x10\x05\x12\x14\n" +
 	"\x10CHANNEL_METADATA\x10\x06\x12\x12\n" +
 	"\x0eCHANNEL_HEALTH\x10\a\x12\x15\n" +
-	"\x11CHANNEL_RATELIMIT\x10\b\"\x04\b\x01\x10\x01\"\x04\b\x02\x10\x02*\x11CHANNEL_ORDERBOOK*\x0eCHANNEL_TRADES*G\n" +
+	"\x11CHANNEL_RATELIMIT\x10\b\"\x04\b\x02\x10\x02*\x0eCHANNEL_TRADES*G\n" +
 	"\x06Source\x12\x16\n" +
 	"\x12SOURCE_UNSPECIFIED\x10\x00\x12\x14\n" +
 	"\x10SOURCE_WEBSOCKET\x10\x01\x12\x0f\n" +
@@ -1145,7 +1279,7 @@ func file_manooch_proto_rawDescGZIP() []byte {
 }
 
 var file_manooch_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_manooch_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_manooch_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_manooch_proto_goTypes = []any{
 	(MarketType)(0),         // 0: manooch.v1.MarketType
 	(Channel)(0),            // 1: manooch.v1.Channel
@@ -1153,13 +1287,15 @@ var file_manooch_proto_goTypes = []any{
 	(Status)(0),             // 3: manooch.v1.Status
 	(*Instrument)(nil),      // 4: manooch.v1.Instrument
 	(*Envelope)(nil),        // 5: manooch.v1.Envelope
-	(*MarkPrice)(nil),       // 6: manooch.v1.MarkPrice
-	(*IndexPrice)(nil),      // 7: manooch.v1.IndexPrice
-	(*Funding)(nil),         // 8: manooch.v1.Funding
-	(*InstrumentMeta)(nil),  // 9: manooch.v1.InstrumentMeta
-	(*RateLimit)(nil),       // 10: manooch.v1.RateLimit
-	(*RateLimitBudget)(nil), // 11: manooch.v1.RateLimitBudget
-	(*Health)(nil),          // 12: manooch.v1.Health
+	(*PriceLevel)(nil),      // 6: manooch.v1.PriceLevel
+	(*OrderBook)(nil),       // 7: manooch.v1.OrderBook
+	(*MarkPrice)(nil),       // 8: manooch.v1.MarkPrice
+	(*IndexPrice)(nil),      // 9: manooch.v1.IndexPrice
+	(*Funding)(nil),         // 10: manooch.v1.Funding
+	(*InstrumentMeta)(nil),  // 11: manooch.v1.InstrumentMeta
+	(*RateLimit)(nil),       // 12: manooch.v1.RateLimit
+	(*RateLimitBudget)(nil), // 13: manooch.v1.RateLimitBudget
+	(*Health)(nil),          // 14: manooch.v1.Health
 }
 var file_manooch_proto_depIdxs = []int32{
 	0,  // 0: manooch.v1.Instrument.market_type:type_name -> manooch.v1.MarketType
@@ -1167,19 +1303,22 @@ var file_manooch_proto_depIdxs = []int32{
 	1,  // 2: manooch.v1.Envelope.channel:type_name -> manooch.v1.Channel
 	2,  // 3: manooch.v1.Envelope.source:type_name -> manooch.v1.Source
 	3,  // 4: manooch.v1.Envelope.status:type_name -> manooch.v1.Status
-	5,  // 5: manooch.v1.MarkPrice.env:type_name -> manooch.v1.Envelope
-	5,  // 6: manooch.v1.IndexPrice.env:type_name -> manooch.v1.Envelope
-	5,  // 7: manooch.v1.Funding.env:type_name -> manooch.v1.Envelope
-	5,  // 8: manooch.v1.InstrumentMeta.env:type_name -> manooch.v1.Envelope
-	5,  // 9: manooch.v1.RateLimit.env:type_name -> manooch.v1.Envelope
-	11, // 10: manooch.v1.RateLimit.budgets:type_name -> manooch.v1.RateLimitBudget
-	5,  // 11: manooch.v1.Health.env:type_name -> manooch.v1.Envelope
-	3,  // 12: manooch.v1.Health.status:type_name -> manooch.v1.Status
-	13, // [13:13] is the sub-list for method output_type
-	13, // [13:13] is the sub-list for method input_type
-	13, // [13:13] is the sub-list for extension type_name
-	13, // [13:13] is the sub-list for extension extendee
-	0,  // [0:13] is the sub-list for field type_name
+	5,  // 5: manooch.v1.OrderBook.env:type_name -> manooch.v1.Envelope
+	6,  // 6: manooch.v1.OrderBook.bids:type_name -> manooch.v1.PriceLevel
+	6,  // 7: manooch.v1.OrderBook.asks:type_name -> manooch.v1.PriceLevel
+	5,  // 8: manooch.v1.MarkPrice.env:type_name -> manooch.v1.Envelope
+	5,  // 9: manooch.v1.IndexPrice.env:type_name -> manooch.v1.Envelope
+	5,  // 10: manooch.v1.Funding.env:type_name -> manooch.v1.Envelope
+	5,  // 11: manooch.v1.InstrumentMeta.env:type_name -> manooch.v1.Envelope
+	5,  // 12: manooch.v1.RateLimit.env:type_name -> manooch.v1.Envelope
+	13, // 13: manooch.v1.RateLimit.budgets:type_name -> manooch.v1.RateLimitBudget
+	5,  // 14: manooch.v1.Health.env:type_name -> manooch.v1.Envelope
+	3,  // 15: manooch.v1.Health.status:type_name -> manooch.v1.Status
+	16, // [16:16] is the sub-list for method output_type
+	16, // [16:16] is the sub-list for method input_type
+	16, // [16:16] is the sub-list for extension type_name
+	16, // [16:16] is the sub-list for extension extendee
+	0,  // [0:16] is the sub-list for field type_name
 }
 
 func init() { file_manooch_proto_init() }
@@ -1193,7 +1332,7 @@ func file_manooch_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_manooch_proto_rawDesc), len(file_manooch_proto_rawDesc)),
 			NumEnums:      4,
-			NumMessages:   9,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
