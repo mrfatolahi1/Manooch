@@ -166,7 +166,7 @@ func newLive(t *testing.T, options options) *live {
 		PoolSize:      8,
 		Venue:         coretest.Venue,
 		InstanceID:    fmt.Sprintf("instance-%d", time.Now().UnixNano()),
-		SchemaVersion: 2,
+		SchemaVersion: 3,
 		Metrics:       observability.NewMetrics(),
 		Logger:        quiet(),
 	})

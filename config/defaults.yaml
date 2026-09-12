@@ -17,7 +17,7 @@ scales:
   rate_exp: -12
 
 publish:
-  schema_version: 2
+  schema_version: 3
   cadence: every_update            # only supported value
 
 health:
