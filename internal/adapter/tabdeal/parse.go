@@ -36,6 +36,12 @@ func (a *Adapter) Parse(raw []byte, receivedNs int64) ([]core.Message, error) {
 	body := raw
 	if len(f.Data) > 0 {
 		body = f.Data
+		// Tabdeal has emitted both an object and a JSON-encoded string in the
+		// data field; accept either wire representation.
+		var encoded string
+		if len(body) > 0 && body[0] == '"' && json.Unmarshal(body, &encoded) == nil {
+			body = []byte(encoded)
+		}
 	}
 	var d depthData
 	if err := json.Unmarshal(body, &d); err != nil {

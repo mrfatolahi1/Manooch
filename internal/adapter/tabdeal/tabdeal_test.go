@@ -38,6 +38,15 @@ func TestParseDepth(t *testing.T) {
 	}
 }
 
+func TestParseEncodedDepthPayload(t *testing.T) {
+	a := testAdapter(t, "")
+	frame := `{"stream":"special_margin-BTC_USDT-depth-1000ms","data":"{\"e\":\"depthUpdate\",\"E\":1700000000123,\"s\":\"BTCUSDT\",\"b\":[[\"100.1\",\"2.5\"]],\"a\":[[\"100.2\",\"1.25\"]]}"}`
+	msgs, err := a.Parse([]byte(frame), 1700000000999000000)
+	if err != nil || len(msgs) != 1 {
+		t.Fatalf("parse encoded payload: messages=%d err=%v", len(msgs), err)
+	}
+}
+
 func TestFetchOnceDepth(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/fapi/v1/depth" || r.URL.Query().Get("symbol") != "BTC_USDT" {
