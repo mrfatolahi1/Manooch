@@ -8,11 +8,12 @@ A crypto market-data price service. It connects to exchanges over public
 websockets, normalizes what it sees into one format, and publishes to Redis for
 downstream consumers. One process serves one venue.
 
-Two venues: **Binance USD-M futures** and **KuCoin futures**, one process each,
-sharing nothing but Redis. Per symbol it publishes mark price, index price,
-funding and instrument metadata, plus a health key and a venue-level health and
-rate-limit key. The scope is perpetual linear only — order books and trades are
-gone for good.
+Three venues are supported: **Binance USD-M futures**, **KuCoin futures**, and
+**Tabdeal futures**, one process each, sharing nothing but Redis. Per symbol it
+publishes the venue's configured market data and instrument metadata, plus a
+health key and a venue-level health and rate-limit key. Tabdeal publishes
+perpetual-linear order-book snapshots; Binance and KuCoin publish mark price,
+index price, and funding.
 
 The point of the service is that it never publishes stale or wrong data without
 saying so:
