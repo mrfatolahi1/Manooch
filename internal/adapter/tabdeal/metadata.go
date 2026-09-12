@@ -30,6 +30,9 @@ func (a *Adapter) FetchMetadata(ctx context.Context, marketType manoochv1.Market
 	if marketType != MarketType {
 		return nil, fmt.Errorf("tabdeal: market type %s is not served", core.MarketTypeName(marketType))
 	}
+	if a.options.RESTEndpoint == "" {
+		return nil, fmt.Errorf("tabdeal: no rest endpoint")
+	}
 	if err := a.options.Limiter.Allow(ctx, Venue, ratelimit.LimitRESTWeight, a.RESTCost(core.OpFetchMetadata)); err != nil {
 		return nil, err
 	}
@@ -67,7 +70,7 @@ func (a *Adapter) FetchMetadata(ctx context.Context, marketType manoochv1.Market
 		}
 		tick, _ := price.ParsePrice(fmt.Sprintf("1e-%d", m.PricePrecision))
 		lot, _ := price.ParseSize(fmt.Sprintf("1e-%d", m.QuantityPrecision))
-		out = append(out, &manoochv1.InstrumentMeta{Env: &manoochv1.Envelope{Venue: Venue, Instrument: ref.Proto(m.Symbol), Channel: manoochv1.Channel_CHANNEL_METADATA, ExchangeTimeNs: exchangeNs, RecvTimeNs: received, ExchangeTimeIsSendTime: info.ServerTime > 0, Source: manoochv1.Source_SOURCE_REST, Status: manoochv1.Status_STATUS_HEALTHY}, TickSize: int64(tick), LotSize: int64(lot), MinSize: int64(lot), ContractMultiplier: int64(price.SizeScale), Active: m.Status == "TRADING", LastRefreshNs: received})
+		out = append(out, &manoochv1.InstrumentMeta{Env: &manoochv1.Envelope{Venue: Venue, Instrument: ref.Proto(m.Symbol), Channel: manoochv1.Channel_CHANNEL_METADATA, ExchangeTimeNs: exchangeNs, RecvTimeNs: received, ExchangeTimeIsSendTime: info.ServerTime > 0, Source: manoochv1.Source_SOURCE_REST, Status: manoochv1.Status_STATUS_HEALTHY}, TickSize: int64(tick), LotSize: int64(lot), MinSize: int64(lot), ContractMultiplier: 1, Active: m.Status == "TRADING", LastRefreshNs: received})
 	}
 	if len(out) == 0 {
 		return nil, core.NewParseError(core.KindField, manoochv1.Channel_CHANNEL_METADATA, "", nil, "exchangeInfo listed no linear perpetuals")

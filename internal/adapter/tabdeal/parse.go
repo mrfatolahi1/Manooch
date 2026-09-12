@@ -19,8 +19,6 @@ type frame struct {
 	Event     string          `json:"e"`
 	EventTime int64           `json:"E"`
 	Symbol    string          `json:"s"`
-	Bids      [][]string      `json:"b"`
-	Asks      [][]string      `json:"a"`
 }
 type depthData struct {
 	Event     string              `json:"e"`
