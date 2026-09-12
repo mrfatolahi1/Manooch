@@ -15,6 +15,8 @@ import (
 // subscribes to channels it chose and knows the type already.
 func NewMessage(channel manoochv1.Channel) (proto.Message, error) {
 	switch channel {
+	case manoochv1.Channel_CHANNEL_ORDERBOOK:
+		return &manoochv1.OrderBook{}, nil
 	case manoochv1.Channel_CHANNEL_MARK_PRICE:
 		return &manoochv1.MarkPrice{}, nil
 	case manoochv1.Channel_CHANNEL_INDEX_PRICE:

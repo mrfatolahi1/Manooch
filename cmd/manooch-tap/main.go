@@ -164,6 +164,9 @@ func summarize(message any) string {
 	case *manoochv1.IndexPrice:
 		return "index=" + price.Price(m.IndexPrice).String()
 
+	case *manoochv1.OrderBook:
+		return fmt.Sprintf("depth=%d bids=%d asks=%d", m.Depth, len(m.Bids), len(m.Asks))
+
 	case *manoochv1.Funding:
 		// A zero next-funding time means the venue did not supply one, which is
 		// not the same as a funding settlement in 1970.

@@ -108,6 +108,8 @@ func ChannelValidFor(channel manoochv1.Channel, marketType manoochv1.MarketType)
 	case manoochv1.Channel_CHANNEL_MARK_PRICE, manoochv1.Channel_CHANNEL_INDEX_PRICE,
 		manoochv1.Channel_CHANNEL_FUNDING:
 		return IsDerivative(marketType)
+	case manoochv1.Channel_CHANNEL_ORDERBOOK:
+		return marketType == manoochv1.MarketType_MARKET_TYPE_PERP_LINEAR
 	}
 	return false
 }
