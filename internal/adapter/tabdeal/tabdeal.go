@@ -18,6 +18,7 @@ import (
 
 const Venue = "TABDEAL"
 const MarketType = manoochv1.MarketType_MARKET_TYPE_PERP_LINEAR
+const depthTopicPeriod = "1000ms"
 
 var Channels = []manoochv1.Channel{manoochv1.Channel_CHANNEL_ORDERBOOK}
 
@@ -157,7 +158,7 @@ func (a *Adapter) SocketURL(plan core.SocketPlan) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		stream := strings.ToLower(symbol) + "@depth@2000ms"
+		stream := "special_margin@" + symbol + "@depth@" + depthTopicPeriod
 		if !seen[stream] {
 			parts = append(parts, stream)
 			seen[stream] = true
@@ -182,7 +183,7 @@ func (a *Adapter) Dial(ctx context.Context, plan core.SocketPlan) (core.Conn, er
 	seen := map[string]bool{}
 	for _, s := range plan.Specifications {
 		symbol, _ := a.VenueSymbol(s.Instrument)
-		stream := strings.ToLower(symbol) + "@depth@2000ms"
+		stream := "special_margin@" + symbol + "@depth@" + depthTopicPeriod
 		if !seen[stream] {
 			params = append(params, stream)
 			seen[stream] = true

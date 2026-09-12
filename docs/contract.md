@@ -4,13 +4,13 @@ The wire format between Manooch and every consumer. Generated Go is committed so
 
 | File | Holds |
 |---|---|
-| `schema/manooch.proto` | 4 enums, 9 messages, `proto3`, package `manooch.v1` |
+| `schema/manooch.proto` | 4 enums, 11 messages, `proto3`, package `manooch.v1` |
 | `schema/README.md` | Evolution rules and the regeneration command |
-| `gen/manoochv1/manooch.pb.go` | Generated; 13 Go types. Do not edit |
+| `gen/manoochv1/manooch.pb.go` | Generated; 15 Go types. Do not edit |
 
-Enums: `MarketType` (spot, margin, perp/future × linear/inverse), `Channel` (mark_price, index_price, funding, metadata, health, ratelimit), `Source`, `Status` — each with `_UNSPECIFIED = 0`.
+Enums: `MarketType` (spot, margin, perp/future × linear/inverse), `Channel` (orderbook, mark_price, index_price, funding, metadata, health, ratelimit), `Source`, `Status` — each with `_UNSPECIFIED = 0`.
 
-Messages: `Instrument`, `Envelope`, `MarkPrice`, `IndexPrice`, `Funding`, `InstrumentMeta`, `RateLimit`, `RateLimitBudget`, `Health`. Everything here is written by something.
+Messages: `Instrument`, `Envelope`, `PriceLevel`, `OrderBook`, `MarkPrice`, `IndexPrice`, `Funding`, `InstrumentMeta`, `RateLimit`, `RateLimitBudget`, `Health`. Everything here is written by something.
 
 ## `exchange_time_is_send_time`
 
@@ -18,18 +18,18 @@ Added at M3, field 17. It says whether `exchange_time_ns` is the venue's clock a
 
 KuCoin stamps a funding rate with the instant it settled — hours old on arrival — so differencing it reports a four-hour clock skew on a healthy venue. `internal/supervisor` measures skew only from a send time, and `publish.RedisPublisher` keeps event times out of the publish-latency histogram for the same reason. **The default is false**: a missing signal is better than a wrong one, so an adapter opts in.
 
-## Scope reduction at M1
+## Order books
 
-The service is perp mark price only. `OrderBook`, `Trades`, `Trade`, `PriceLevel` and `Side` are **deleted**, and `Channel` reserves the numbers they used:
+`OrderBook` carries a complete snapshot for one configured symbol. `bids` are descending by price and `asks` ascending; `depth` is the number of levels delivered. Tabdeal's futures adapter fills it from the public depth REST endpoint and its public depth stream.
 
 ```protobuf
-reserved 1, 2;
-reserved "CHANNEL_ORDERBOOK", "CHANNEL_TRADES";
+reserved 2;
+reserved "CHANNEL_TRADES";
 ```
 
 Both forms matter. The numeric reservation stops a future channel decoding as the retired one; the name reservation stops a config or a `protojson` payload written against the old names from resolving to something new.
 
-`publish.schema_version` is **2**. Nothing about a `Channel` value's meaning is visible on the wire, so the version is the only signal a consumer gets that number 1 no longer means what it did.
+`publish.schema_version` is **3** because channel 1 is active again for order books.
 
 `MarketType` keeps every value. Only `PERP_LINEAR` is used; deleting the rest buys nothing and reservations would clutter the file.
 

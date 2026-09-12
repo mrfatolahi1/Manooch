@@ -172,7 +172,7 @@ Complete. Every path below is built and every config section is read.
 | `testdata/{binance,kucoin}/` | built — one raw frame per case, beside its golden |
 
 Deliberately not built: `RedisLimiter`, venue-level rollup status, adaptive
-staleness thresholds, spot/margin/inverse/dated support, order books, trades, a
+staleness thresholds, spot/margin/inverse/dated support, trades, a
 third venue, historical storage, an HTTP endpoint serving market data.
 
 ## Did the second venue reach `internal/core`?
