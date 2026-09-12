@@ -9,6 +9,7 @@ habits are allowed to exist. Everything downstream of `Parse` is venue-agnostic.
 | `internal/adapter/adapter.go` | `New`, `Specifications`, `Venues`, `Dependencies` — venue name to implementation |
 | `internal/adapter/binance/` | See [`adapter-binance.md`](adapter-binance.md) |
 | `internal/adapter/kucoin/` | See [`adapter-kucoin.md`](adapter-kucoin.md) |
+| `internal/adapter/tabdeal/` | See [`adapter-tabdeal.md`](adapter-tabdeal.md) |
 | `internal/adapter/adaptertest/` | The conformance suite every adapter must pass |
 | `internal/adapter/normalize_test.go` | Precision and cross-venue normalization, which need two venues to mean anything |
 

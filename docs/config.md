@@ -9,7 +9,7 @@ Loads `defaults.yaml` and one venue file, merges them, and returns a validated `
 | `load_test.go` | `TestLoadValid`, `TestLoadInvalid` (walks the golden cases), `TestLoadMissingVenueFile` |
 | `testdata/valid/` | A config that loads; the base for every invalid case |
 | `testdata/invalid/<case>/` | Only the file that case breaks, plus `error.golden` — the exact expected message |
-| `config/` | The shipped `defaults.yaml` and `venues/binance.yaml`, `venues/kucoin.yaml` |
+| `config/` | The shipped `defaults.yaml` and `venues/binance.yaml`, `venues/kucoin.yaml`, `venues/tabdeal.yaml` |
 
 `Load(dir, venue)` is the entry point. `Config.Streams()` expands instrument blocks × symbols × channels into one `Stream` per Redis key. Full API: `go doc ./internal/config`.
 

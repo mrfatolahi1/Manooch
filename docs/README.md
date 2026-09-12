@@ -10,6 +10,7 @@ Start with [`architecture.md`](architecture.md): the shape, the dependency rule,
 | [`adapter.md`](adapter.md) | `internal/core/adapter.go`, `internal/adapter/` — the inbound port |
 | [`adapter-binance.md`](adapter-binance.md) | `internal/adapter/binance` — endpoint, payload mapping, quirks |
 | [`adapter-kucoin.md`](adapter-kucoin.md) | `internal/adapter/kucoin` — bullet bootstrap, client ping, split subjects |
+| [`adapter-tabdeal.md`](adapter-tabdeal.md) | `internal/adapter/tabdeal` — futures order-book stream and REST snapshot |
 | [`transport.md`](transport.md) | `internal/transport` — websocket connections, backoff, circuit breaker |
 | [`supervisor.md`](supervisor.md) | `internal/supervisor` — the restart procedure and the escalation tiers |
 | [`health.md`](health.md) | `internal/health` — status semantics, TTL as freshness, the heartbeat |
