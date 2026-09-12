@@ -165,7 +165,14 @@ func summarize(message any) string {
 		return "index=" + price.Price(m.IndexPrice).String()
 
 	case *manoochv1.OrderBook:
-		return fmt.Sprintf("depth=%d bids=%d asks=%d", m.Depth, len(m.Bids), len(m.Asks))
+		bestBid, bestAsk := "-", "-"
+		if len(m.Bids) > 0 {
+			bestBid = price.Price(m.Bids[0].Price).String() + " x " + price.Size(m.Bids[0].Size).String()
+		}
+		if len(m.Asks) > 0 {
+			bestAsk = price.Price(m.Asks[0].Price).String() + " x " + price.Size(m.Asks[0].Size).String()
+		}
+		return fmt.Sprintf("depth=%d bids=%d asks=%d best_bid=%s best_ask=%s", m.Depth, len(m.Bids), len(m.Asks), bestBid, bestAsk)
 
 	case *manoochv1.Funding:
 		// A zero next-funding time means the venue did not supply one, which is
