@@ -197,7 +197,7 @@ func (a *Adapter) Dial(ctx context.Context, plan core.SocketPlan) (core.Conn, er
 }
 
 func (a *Adapter) RESTCost(op core.Operation) int {
-	if op == core.OpFetchOnce {
+	if op == core.OpFetchOnce || op == core.OpFetchMetadata {
 		return 1
 	}
 	return 0
