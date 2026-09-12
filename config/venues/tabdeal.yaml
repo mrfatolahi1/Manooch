@@ -1,0 +1,36 @@
+venue: TABDEAL
+enabled: true
+
+endpoints:
+  ws:
+    PERP_LINEAR: "wss://api1.tabdeal.org/special_margin/stream/"
+  rest:
+    PERP_LINEAR: "https://api1.tabdeal.org/r"
+
+rate_limit:
+  # Tabdeal does not publish a numeric public budget for depth requests. Keep
+  # a conservative local budget until the venue documents one.
+  rest_weight_per_minute: 1200
+  max_weight_fraction: 0.5
+  ws_connect_per_5min: 300
+  ws_connect_fraction: 0.5
+  subscriptions_per_connection: 50
+
+connection:
+  max_streams_per_socket: 50
+  ping_interval: 20s
+  pong_timeout: 10s
+  read_timeout: 60s
+  max_age: 23h
+
+quirks:
+  timestamp_unit: ms
+  cadence:
+    orderbook: 2s
+
+symbol_overrides: {}
+
+instruments:
+  - market_type: PERP_LINEAR
+    channels: [orderbook]
+    symbols: [BTC_USDT, ETH_USDT]

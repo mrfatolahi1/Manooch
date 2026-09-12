@@ -10,6 +10,7 @@ import (
 
 	"github.com/you/manooch/internal/adapter/binance"
 	"github.com/you/manooch/internal/adapter/kucoin"
+	"github.com/you/manooch/internal/adapter/tabdeal"
 	"github.com/you/manooch/internal/config"
 	"github.com/you/manooch/internal/core"
 	"github.com/you/manooch/internal/ratelimit"
@@ -30,6 +31,7 @@ type Dependencies struct {
 var builders = map[string]func(*config.Config, Dependencies) (core.Adapter, error){
 	binance.Venue: newBinance,
 	kucoin.Venue:  newKuCoin,
+	tabdeal.Venue: newTabdeal,
 }
 
 // Venues lists the venues this build serves, sorted, for error messages.
@@ -95,5 +97,18 @@ func newBinance(configuration *config.Config, dependencies Dependencies) (core.A
 		ReadTimeout:         configuration.Connection.ReadTimeout.Standard(),
 		TimeToLive:          configuration.TimeToLiveByChannel(),
 		Limiter:             dependencies.Limiter,
+	})
+}
+
+func newTabdeal(configuration *config.Config, dependencies Dependencies) (core.Adapter, error) {
+	marketType := core.MarketTypeName(tabdeal.MarketType)
+	return tabdeal.New(tabdeal.Options{
+		WebSocketEndpoint: configuration.Endpoints.WebSocket[marketType],
+		RESTEndpoint:      configuration.Endpoints.REST[marketType],
+		SymbolOverrides:   configuration.SymbolOverrides,
+		MaxStreamsPerSocket: configuration.Connection.MaxStreamsPerSocket,
+		ReadTimeout:       configuration.Connection.ReadTimeout.Standard(),
+		TimeToLive:        configuration.TimeToLiveByChannel(),
+		Limiter:           dependencies.Limiter,
 	})
 }
