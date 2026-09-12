@@ -103,12 +103,12 @@ func newBinance(configuration *config.Config, dependencies Dependencies) (core.A
 func newTabdeal(configuration *config.Config, dependencies Dependencies) (core.Adapter, error) {
 	marketType := core.MarketTypeName(tabdeal.MarketType)
 	return tabdeal.New(tabdeal.Options{
-		WebSocketEndpoint: configuration.Endpoints.WebSocket[marketType],
-		RESTEndpoint:      configuration.Endpoints.REST[marketType],
-		SymbolOverrides:   configuration.SymbolOverrides,
+		WebSocketEndpoint:   configuration.Endpoints.WebSocket[marketType],
+		RESTEndpoint:        configuration.Endpoints.REST[marketType],
+		SymbolOverrides:     configuration.SymbolOverrides,
 		MaxStreamsPerSocket: configuration.Connection.MaxStreamsPerSocket,
-		ReadTimeout:       configuration.Connection.ReadTimeout.Standard(),
-		TimeToLive:        configuration.TimeToLiveByChannel(),
-		Limiter:           dependencies.Limiter,
+		ReadTimeout:         configuration.Connection.ReadTimeout.Standard(),
+		TimeToLive:          configuration.TimeToLiveByChannel(),
+		Limiter:             dependencies.Limiter,
 	})
 }
