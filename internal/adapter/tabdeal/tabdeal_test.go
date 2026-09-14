@@ -47,6 +47,28 @@ func TestParseEncodedDepthPayload(t *testing.T) {
 	}
 }
 
+func TestFetchMetadataVenueSymbol(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"serverTime":1700000000000,"symbols":[{"symbol":"BTC_USDT","status":"TRADING","pricePrecision":1,"quantityPrecision":5}]}`))
+	}))
+	defer server.Close()
+	a := testAdapter(t, server.URL)
+	meta, err := a.FetchMetadata(context.Background(), MarketType)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(meta) != 1 {
+		t.Fatalf("instruments=%d", len(meta))
+	}
+	// exchangeInfo reports the underscored market-data form ("BTC_USDT"), but
+	// venue_symbol must carry the contiguous form the order endpoints expect
+	// ("BTCUSDT") — the two are not the same string on Tabdeal.
+	if got := meta[0].Env.Instrument.VenueSymbol; got != "BTCUSDT" {
+		t.Fatalf("venue_symbol = %q, want %q", got, "BTCUSDT")
+	}
+}
+
 func TestFetchOnceDepth(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/fapi/v1/depth" || r.URL.Query().Get("symbol") != "BTC_USDT" {

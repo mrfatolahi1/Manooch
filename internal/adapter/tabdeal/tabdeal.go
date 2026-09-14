@@ -80,6 +80,16 @@ func (a *Adapter) VenueSymbol(reference core.InstrumentRef) (string, error) {
 	return strings.ToUpper(reference.Canonical()), nil
 }
 
+// orderSymbol is the contiguous form Tabdeal's authenticated order endpoints
+// (POST/GET/DELETE /fapi/v1/order) document, e.g. "BTCUSDT". It is distinct
+// from the underscored form ("BTC_USDT") the public depth/exchangeInfo
+// endpoints require and VenueSymbol returns — Tabdeal uses one spelling for
+// market data and another for trading. InstrumentMeta.venue_symbol is what an
+// order service sends verbatim, so it must use this form.
+func orderSymbol(reference core.InstrumentRef) string {
+	return strings.ToUpper(reference.Base + reference.Quote)
+}
+
 func (a *Adapter) ParseVenueSymbol(symbol string, marketType manoochv1.MarketType) (core.InstrumentRef, error) {
 	if marketType != MarketType {
 		return core.InstrumentRef{}, fmt.Errorf("tabdeal: market type %s is not served", core.MarketTypeName(marketType))
