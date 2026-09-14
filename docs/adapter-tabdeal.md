@@ -10,3 +10,10 @@ are accepted as well.
 Each snapshot becomes one `OrderBook` protobuf message with fixed-point
 `PriceLevel` bids and asks. `lastUpdateId` is carried as `venue_seq` for REST
 snapshots, while Tabdeal's `E` field is treated as an optional send timestamp.
+
+Order book is the only channel this adapter can serve. Tabdeal's public FAPI
+(`ping`, `time`, `exchangeInfo`, `depth`, `aggDepth`, plus the depth and trade
+broadcast streams) has no mark price, index price, or funding rate surface —
+nothing equivalent to Binance Futures' `/fapi/v1/premiumIndex` or a
+`markPrice` stream. `mark_price`/`index_price`/`funding` cannot be added to
+`config/venues/tabdeal.yaml` until Tabdeal publishes one.
